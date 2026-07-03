@@ -3,6 +3,7 @@
 Commands:
 
 * ``argus scan TARGET``  — run a full scan and write reports.
+* ``argus fix TARGET``   — apply verified fixes on a branch and open a pull request.
 * ``argus scanners``     — list available scanners.
 * ``argus reporters``    — list available report formats.
 * ``argus providers``    — list AI providers and their availability.
@@ -140,6 +141,82 @@ def scan(
 
 
 @app.command()
+def fix(
+    target: str = typer.Argument(".", help="Local path to a git repository to fix."),
+    open_pr: bool = typer.Option(
+        False, "--open-pr", help="Push the branch and open a pull request."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be fixed without writing anything."
+    ),
+    branch: str = typer.Option(
+        "argus/security-fixes", "--branch", help="Name of the branch to create."
+    ),
+    base: str | None = typer.Option(
+        None, "--base", help="Base branch for the PR (default: repo's default branch)."
+    ),
+    include_unverified: bool = typer.Option(
+        False, "--include-unverified",
+        help="Also apply fixes that did not self-verify (review carefully).",
+    ),
+    force_branch: bool = typer.Option(
+        False, "--force-branch", help="Reuse/overwrite the branch if it already exists."
+    ),
+    scanners_opt: str | None = typer.Option(
+        None, "--scanners", "-s", help="Comma-separated scanners to run (default: all)."
+    ),
+    min_severity: str | None = typer.Option(
+        None, "--min-severity", help="Only consider findings at/above this severity."
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output."),
+) -> None:
+    """Scan a repo, apply Argus's deterministic fixes on a branch, and open a PR.
+
+    Only fixes Argus can generate and verify locally are applied (e.g. unsafe
+    yaml.load, weak hashes, shell=True). Nothing is pushed or opened unless you
+    pass --open-pr; --open-pr requires a GITHUB_TOKEN or GITLAB_TOKEN.
+    """
+    from argus.core.engine import ScanEngine
+    from argus.remediation.pullrequest import FixOptions, run_fix_workflow
+    from argus.targets import resolve
+
+    try:
+        resolved = resolve(target)
+    except Exception as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(2) from exc
+    if resolved.project is None:
+        err_console.print("[red]Error:[/red] `argus fix` requires a local code path.")
+        raise typer.Exit(2)
+
+    project = resolved.project
+    try:
+        cfg = Config.load(project_root=project.root)
+        # Fixing is deterministic; AI enrichment is not needed and slows things down.
+        cfg.ai.enabled = False
+        if scanners_opt:
+            cfg.scanners = [s.strip() for s in scanners_opt.split(",") if s.strip()]
+        if min_severity:
+            cfg.min_severity = Severity.parse(min_severity)
+
+        progress = None if quiet else (lambda msg: err_console.print(f"[dim]· {msg}[/dim]"))
+        result = ScanEngine(cfg, progress=progress).scan(project)
+
+        options = FixOptions(
+            branch=branch, base=base, open_pr=open_pr,
+            include_unverified=include_unverified, dry_run=dry_run,
+            force_branch=force_branch,
+        )
+        outcome = run_fix_workflow(project, result.findings, options)
+        _print_fix_outcome(outcome, open_pr=open_pr, dry_run=dry_run)
+
+        if outcome.error:
+            raise typer.Exit(1)
+    finally:
+        resolved.cleanup()
+
+
+@app.command()
 def scanners() -> None:
     """List available scanners."""
     table = Table(title="Scanners", show_lines=False)
@@ -221,6 +298,36 @@ def _build_config(*, config, project_root, scanners, exclude, ai_provider, ai_mo
     if fail_on:
         cfg.fail_on = Severity.parse(fail_on)
     return cfg
+
+
+def _print_fix_outcome(outcome, *, open_pr: bool, dry_run: bool) -> None:
+    report = outcome.applied
+    if report.fixes:
+        table = Table(title="Fixes" + (" (dry run)" if dry_run else ""))
+        table.add_column("File", style="bold")
+        table.add_column("Line", justify="right")
+        table.add_column("Rule", style="dim")
+        table.add_column("Verified", justify="center")
+        for f in report.fixes:
+            table.add_row(f.path, str(f.line), f.rule_id,
+                          "[green]yes[/green]" if f.verified else "[yellow]no[/yellow]")
+        console.print(table)
+    else:
+        console.print("[yellow]No deterministic fixes were applicable to these "
+                      "findings.[/yellow]")
+
+    for msg in outcome.messages:
+        console.print(f"[dim]· {msg}[/dim]")
+
+    if outcome.pull_request:
+        console.print(Panel(f"[green]Pull request opened:[/green]\n"
+                            f"{outcome.pull_request.url}", border_style="green"))
+    elif outcome.committed and not open_pr:
+        console.print("[green]Fixes committed to the branch.[/green] "
+                      "Add --open-pr to push and open a pull request.")
+
+    if outcome.error:
+        err_console.print(f"[red]Stopped:[/red] {outcome.error}")
 
 
 def _emit(result: ScanResult, formats: list[str], output: Path | None) -> None:

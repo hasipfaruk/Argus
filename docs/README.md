@@ -2,6 +2,7 @@
 
 - [Architecture](architecture.md) — the core, the scan pipeline, and the plugin seams.
 - [Configuration](configuration.md) — `.argus.yml`, flags, and environment variables.
+- [Fixing & pull requests](fixing.md) — `argus fix`: apply verified fixes and open PRs.
 - [Writing plugins](plugins.md) — scanners, reporters, and AI providers.
 - [Attack Simulation Mode](attack-simulation.md) — the safe, educational exploit demonstrations.
 - [CI/CD integration](ci-cd.md) — GitHub Actions, GitLab CI, pre-commit, and exit codes.

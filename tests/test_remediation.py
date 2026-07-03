@@ -1,0 +1,169 @@
+"""Tests for the fix/PR workflow: rewrites, applier, git ops, and remote parsing."""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from argus.core.config import Config
+from argus.core.engine import ScanEngine
+from argus.core.models import Finding, Location, Severity
+from argus.remediation import git_ops
+from argus.remediation.applier import apply_fixes
+from argus.remediation.hosting import parse_remote
+from argus.remediation.pullrequest import FixOptions, run_fix_workflow
+from argus.remediation.rewrites import fix_line, verify_line_fixed
+
+git_missing = shutil.which("git") is None
+
+
+# --- rewrites --------------------------------------------------------------
+def test_fix_line_transforms_known_rules():
+    assert fix_line("patterns.python-yaml-load", "x = yaml.load(data)") == \
+        "x = yaml.safe_load(data)"
+    assert "sha256" in fix_line("patterns.weak-hash-md5-sha1", "hashlib.md5(x)")
+    assert "shell=True" not in fix_line(
+        "patterns.python-shell-true", "subprocess.run(cmd, shell=True)")
+
+
+def test_fix_line_unknown_rule_returns_none():
+    assert fix_line("patterns.nonexistent", "whatever") is None
+
+
+def test_verify_line_fixed():
+    fixed = fix_line("patterns.python-yaml-load", "yaml.load(x)")
+    assert verify_line_fixed("patterns.python-yaml-load", fixed) is True
+    # The original still trips the detection.
+    assert verify_line_fixed("patterns.python-yaml-load", "yaml.load(x)") is False
+
+
+# --- applier ---------------------------------------------------------------
+def _finding(rule_id: str, path: str, line: int) -> Finding:
+    return Finding(
+        id=f"{rule_id}:{line}", rule_id=rule_id, scanner="patterns",
+        title="t", description="d",
+        location=Location(path=path, start_line=line),
+        severity=Severity.HIGH,
+    )
+
+
+def test_apply_fixes_preserves_indentation(tmp_path: Path):
+    src = tmp_path / "m.py"
+    src.write_text("def f():\n    return yaml.load(data)\n", encoding="utf-8")
+    from argus.core.project import Project
+
+    project = Project.from_path(tmp_path)
+    findings = [_finding("patterns.python-yaml-load", "m.py", 2)]
+    report = apply_fixes(project, findings)
+
+    assert report.any_changes
+    assert src.read_text(encoding="utf-8") == "def f():\n    return yaml.safe_load(data)\n"
+    # Indentation kept.
+    assert report.fixes[0].after.startswith("    ")
+
+
+def test_apply_fixes_dry_run_writes_nothing(tmp_path: Path):
+    src = tmp_path / "m.py"
+    original = "yaml.load(x)\n"
+    src.write_text(original, encoding="utf-8")
+    from argus.core.project import Project
+
+    project = Project.from_path(tmp_path)
+    report = apply_fixes(project, [_finding("patterns.python-yaml-load", "m.py", 1)],
+                         dry_run=True)
+    assert report.any_changes            # it reports what it would do
+    assert src.read_text(encoding="utf-8") == original  # but changes nothing
+
+
+def test_apply_fixes_skips_unverifiable_without_flag(tmp_path: Path):
+    """A line that doesn't actually contain the pattern won't verify -> skipped."""
+    src = tmp_path / "m.py"
+    src.write_text("a = 1\n", encoding="utf-8")
+    from argus.core.project import Project
+
+    project = Project.from_path(tmp_path)
+    report = apply_fixes(project, [_finding("patterns.python-yaml-load", "m.py", 1)])
+    assert not report.any_changes
+    assert report.skipped
+
+
+# --- remote parsing --------------------------------------------------------
+@pytest.mark.parametrize("url,host,owner,repo", [
+    ("https://github.com/octo/repo.git", "github", "octo", "repo"),
+    ("https://github.com/octo/repo", "github", "octo", "repo"),
+    ("git@github.com:octo/repo.git", "github", "octo", "repo"),
+    ("https://gitlab.com/group/sub/proj.git", "gitlab", "group/sub", "proj"),
+    ("git@bitbucket.org:team/repo.git", "bitbucket", "team", "repo"),
+])
+def test_parse_remote(url, host, owner, repo):
+    ref = parse_remote(url)
+    assert ref is not None
+    assert (ref.host, ref.owner, ref.repo) == (host, owner, repo)
+
+
+def test_parse_remote_unknown_host():
+    assert parse_remote("https://example.com/x/y.git") is None
+
+
+# --- end-to-end workflow (git-backed) --------------------------------------
+def _git_repo(tmp_path: Path) -> Path:
+    (tmp_path / "app.py").write_text(
+        "import yaml\n"
+        "def load(x):\n"
+        "    return yaml.load(x)\n",
+        encoding="utf-8",
+    )
+    run = lambda *a: subprocess.run(  # noqa: E731
+        ["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+    run("init", "-q")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    return tmp_path
+
+
+@pytest.mark.skipif(git_missing, reason="git not available")
+def test_fix_workflow_creates_branch_and_commits(tmp_path: Path):
+    from argus.core.project import Project
+
+    repo = _git_repo(tmp_path)
+    project = Project.from_path(repo)
+    result = ScanEngine(Config(ai=Config().ai)).scan(project)
+    # Disable AI to keep it deterministic (already offline heuristic anyway).
+
+    outcome = run_fix_workflow(
+        project, result.findings,
+        FixOptions(branch="argus/test-fixes", open_pr=False),
+    )
+    assert outcome.committed
+    assert outcome.applied.any_changes
+    assert git_ops.branch_exists(repo, "argus/test-fixes")
+    # The file on the branch is fixed.
+    assert "safe_load" in (repo / "app.py").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(git_missing, reason="git not available")
+def test_fix_workflow_dry_run_no_git_needed(tmp_path: Path):
+    from argus.core.project import Project
+
+    (tmp_path / "app.py").write_text("import yaml\nyaml.load(x)\n", encoding="utf-8")
+    project = Project.from_path(tmp_path)
+    result = ScanEngine(Config()).scan(project)
+    outcome = run_fix_workflow(project, result.findings, FixOptions(dry_run=True))
+    assert outcome.applied.any_changes
+    assert not outcome.committed
+    # Dry run must not modify the file.
+    assert "safe_load" not in (tmp_path / "app.py").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(git_missing, reason="git not available")
+def test_fix_workflow_errors_on_non_repo(tmp_path: Path):
+    from argus.core.project import Project
+
+    (tmp_path / "app.py").write_text("yaml.load(x)\n", encoding="utf-8")
+    project = Project.from_path(tmp_path)
+    outcome = run_fix_workflow(project, [_finding("patterns.python-yaml-load", "app.py", 1)],
+                               FixOptions(open_pr=False))
+    assert outcome.error and "not a git repository" in outcome.error

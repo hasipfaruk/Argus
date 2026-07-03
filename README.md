@@ -67,6 +67,9 @@ argus scan ./my-app --attack-sim --patches -f html -o report.html
 # Scan a remote repository (shallow-cloned to a temp dir, then cleaned up)
 argus scan https://github.com/org/repo
 
+# Apply Argus's verified fixes to a branch and open a pull request
+argus fix ./my-app --open-pr
+
 # Use a local model so code stays on your machine
 argus scan ./my-app --ai-provider ollama --ai-model llama3.1
 
@@ -156,14 +159,31 @@ up automatically. Full guide: [docs/plugins.md](docs/plugins.md).
 If a requested provider is unavailable, Argus warns and falls back to `heuristic`
 so a scan always completes.
 
+## Fixing, not just finding
+
+`argus fix` closes the loop: it scans a repository, applies the fixes it can
+verify locally to a fresh branch, commits them, and (with `--open-pr`) opens a
+pull request.
+
+```bash
+argus fix ./my-app --dry-run      # preview the changes, write nothing
+argus fix ./my-app                # apply fixes to a branch and commit locally
+argus fix ./my-app --open-pr      # also push and open a PR (needs GITHUB_TOKEN)
+```
+
+Only deterministic, self-verified fixes are applied by default (e.g. unsafe
+`yaml.load` → `yaml.safe_load`, weak hashes → SHA-256, `shell=True` removal,
+`debug=True` → `debug=False`). See [docs/fixing.md](docs/fixing.md).
+
 ## Roadmap
 
 Implemented: project analysis, secrets/dependency/SAST/IaC scanners, multi-provider
 AI enrichment, Attack Simulation Mode, deterministic patch generation with
-self-verification, and JSON/SARIF/Markdown/HTML/CSV reporting.
+self-verification, **automated fix branches and pull requests** (`argus fix`), and
+JSON/SARIF/Markdown/HTML/CSV reporting.
 
 Planned: dynamic analysis (DAST) for deployed URLs, AST-based per-language
-scanners, automated pull-request creation, the web dashboard (trends, timelines,
+scanners, live advisory-database sync (OSV), the web dashboard (trends, timelines,
 collaboration), and richer compliance rule packs.
 
 ## Contributing
