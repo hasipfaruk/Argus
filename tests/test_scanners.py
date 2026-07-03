@@ -72,3 +72,61 @@ def test_requirements_parser():
 
 def test_entropy_distinguishes_random_from_words():
     assert _shannon_entropy("password") < _shannon_entropy("aB3$xZ9!qW2#mK7&")
+
+
+# --- false-positive suppression (validated against real-world scans) ---------
+def _run_patterns(tmp_path, rel_path: str, content: str):
+    from argus.analysis.repository import RepositoryAnalyzer
+    from argus.core.project import Project
+
+    target = tmp_path / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    project = Project.from_path(tmp_path)
+    RepositoryAnalyzer().analyze(project)
+    cls = registry.get_scanner("patterns")
+    return list(cls().scan(ScannerContext(project=project, config=Config(), ai=None)))
+
+
+def test_weak_hash_suppressed_when_usedforsecurity_false(tmp_path):
+    findings = _run_patterns(
+        tmp_path, "auth.py", "h = hashlib.md5(x, usedforsecurity=False).hexdigest()\n")
+    assert not [f for f in findings if f.rule_id == "patterns.weak-hash-md5-sha1"]
+    # But a plain md5 IS still flagged.
+    findings2 = _run_patterns(tmp_path, "auth2.py", "h = hashlib.md5(x).hexdigest()\n")
+    assert [f for f in findings2 if f.rule_id == "patterns.weak-hash-md5-sha1"]
+
+
+def test_pickle_roundtrip_suppressed(tmp_path):
+    findings = _run_patterns(tmp_path, "m.py", "y = pickle.loads(pickle.dumps(obj))\n")
+    assert not [f for f in findings if f.rule_id == "patterns.python-pickle-loads"]
+
+
+def test_test_file_findings_are_downgraded(tmp_path):
+    from argus.core.models import Confidence, Severity
+
+    findings = _run_patterns(
+        tmp_path, "tests/test_x.py", "r = requests.get(url, verify=False)\n")
+    tls = [f for f in findings if f.rule_id == "patterns.tls-verify-disabled"]
+    assert tls, "should still report, just downgraded"
+    assert tls[0].severity < Severity.HIGH          # downgraded from HIGH
+    assert tls[0].confidence == Confidence.LOW
+    assert "test-context" in tls[0].tags
+
+
+def test_private_key_in_tests_dir_downgraded(clean_project, tmp_path):
+    from argus.core.models import Severity
+
+    # A private key committed under a top-level tests/ dir is test material.
+    key = tmp_path / "tests" / "certs" / "server.key"
+    key.parent.mkdir(parents=True, exist_ok=True)
+    key.write_text("-----BEGIN PRIVATE KEY-----\nMIIabc\n-----END PRIVATE KEY-----\n",
+                   encoding="utf-8")
+    from argus.core.project import Project
+
+    project = Project.from_path(tmp_path)
+    cls = registry.get_scanner("secrets")
+    findings = list(cls().scan(ScannerContext(project=project, config=Config(), ai=None)))
+    pk = [f for f in findings if f.rule_id == "secrets.private-key-block"]
+    assert pk, "still detected"
+    assert pk[0].severity <= Severity.LOW           # downgraded, not Critical

@@ -56,8 +56,12 @@ _PLACEHOLDER = re.compile(
     r"(?i)^(x{3,}|\*{3,}|<[^>]+>|\$\{[^}]+\}|change[_\- ]?me|your[_\-]|example|"
     r"placeholder|dummy|sample|test|todo|none|null|redacted|\.{3})")
 
-# Files where secrets are expected to be templates, so downgrade confidence.
-_EXAMPLE_FILE = re.compile(r"(?i)(\.example$|\.sample$|\.template$|/tests?/|/fixtures?/|\.md$)")
+# Files where secrets are expected to be templates or fixtures, so downgrade
+# confidence. Anchored with (^|/) so a top-level tests/ or fixtures/ dir matches,
+# not just nested ones (a real repo often has tests/certs/*.key test material).
+_EXAMPLE_FILE = re.compile(
+    r"(?i)(\.example$|\.sample$|\.template$|(^|/)tests?/|(^|/)fixtures?/|"
+    r"(^|/)testdata/|\.md$)")
 
 
 def _shannon_entropy(s: str) -> float:

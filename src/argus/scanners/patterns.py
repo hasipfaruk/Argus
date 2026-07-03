@@ -43,6 +43,10 @@ class Rule:
     languages: set[str] = field(default_factory=set)
     confidence: Confidence = Confidence.MEDIUM
     references: list[str] = field(default_factory=list)
+    # If this pattern also matches the line, the finding is suppressed. Used to
+    # encode safe idioms that would otherwise be false positives (e.g. a hash
+    # marked usedforsecurity=False, or a pickle round-trip of the app's own data).
+    suppress: re.Pattern[str] | None = None
 
 
 def _rx(pattern: str) -> re.Pattern[str]:
@@ -153,6 +157,8 @@ RULES: list[Rule] = [
         pattern=_rx(r"\bpickle\.(loads|load)\("),
         severity=Severity.HIGH, cwe=["CWE-502"], owasp=["A08:2021-Software and Data Integrity Failures"],
         languages={"Python"}, confidence=Confidence.LOW,
+        # A round-trip of the app's own freshly-pickled data is not untrusted input.
+        suppress=_rx(r"pickle\.loads\(\s*pickle\.dumps"),
         why="pickle executes code during deserialization; loading untrusted bytes is "
             "unsafe.",
         attack="Provide a crafted pickle stream whose __reduce__ runs a command.",
@@ -181,6 +187,9 @@ RULES: list[Rule] = [
         pattern=_rx(r"(?i)(hashlib\.(md5|sha1)\(|MessageDigest\.getInstance\(\s*['\"](MD5|SHA-?1)|createHash\(\s*['\"](md5|sha1))"),
         severity=Severity.MEDIUM, cwe=["CWE-327"], owasp=["A02:2021-Cryptographic Failures"],
         confidence=Confidence.MEDIUM,
+        # Python lets callers mark a hash as non-security (e.g. HTTP digest auth);
+        # respect that intent rather than flagging it.
+        suppress=_rx(r"usedforsecurity\s*=\s*False"),
         why="MD5 and SHA-1 are broken for security purposes (collisions, speed) and "
             "must not be used for integrity or password hashing.",
         attack="Exploit collision weaknesses, or brute-force fast hashes for stored "
@@ -237,6 +246,18 @@ RULES: list[Rule] = [
 ]
 
 
+# Paths that are test/fixture code. Findings here are real but lower priority
+# (e.g. a test deliberately using verify=False), so they are downgraded, not hidden.
+_TEST_PATH = re.compile(
+    r"(?i)(^|/)(tests?|testing|__tests__|fixtures?|specs?)/|"
+    r"(^|/)(test_[^/]*|[^/]*_test|conftest)\.[a-z0-9]+$"
+)
+
+
+def _is_test_file(path: str) -> bool:
+    return bool(_TEST_PATH.search(path))
+
+
 @scanner
 class PatternScanner(Scanner):
     name = "patterns"
@@ -251,6 +272,7 @@ class PatternScanner(Scanner):
         for f in ctx.project.files():
             if f.language in self._SKIP_LANGS or f.is_probably_binary():
                 continue
+            in_test = _is_test_file(f.rel_path)
             lines = f.lines()
             for rule in RULES:
                 if rule.languages and f.language not in rule.languages:
@@ -258,12 +280,25 @@ class PatternScanner(Scanner):
                 for lineno, line in enumerate(lines, start=1):
                     if len(line) > 2000:
                         continue
-                    if rule.pattern.search(line):
-                        counter += 1
-                        yield self._finding(rule, counter, f.rel_path, lineno, line)
+                    if not rule.pattern.search(line):
+                        continue
+                    if rule.suppress and rule.suppress.search(line):
+                        continue  # a known-safe idiom on this line
+                    counter += 1
+                    yield self._finding(rule, counter, f.rel_path, lineno, line,
+                                        in_test=in_test)
 
     def _finding(self, rule: Rule, index: int, path: str, lineno: int,
-                 line: str) -> Finding:
+                 line: str, *, in_test: bool = False) -> Finding:
+        severity = rule.severity
+        confidence = rule.confidence
+        tags = ["sast"]
+        # Test/fixture code is lower risk: downgrade a level and mark it, rather
+        # than hiding it. Keeps the signal without drowning real production issues.
+        if in_test:
+            severity = Severity(max(Severity.INFO, rule.severity - 1))
+            confidence = Confidence.LOW
+            tags.append("test-context")
         return Finding(
             id=f"{self.name}:{rule.id}:{index}",
             rule_id=f"{self.name}.{rule.id}",
@@ -271,8 +306,8 @@ class PatternScanner(Scanner):
             title=rule.title,
             description=rule.why,
             location=Location(path=path, start_line=lineno, snippet=line.strip()[:240]),
-            severity=rule.severity,
-            confidence=rule.confidence,
+            severity=severity,
+            confidence=confidence,
             likelihood=Likelihood.POSSIBLE,
             cwe=rule.cwe,
             owasp=rule.owasp,
@@ -287,5 +322,5 @@ class PatternScanner(Scanner):
                     if rule.cwe else "",
                 ],
             ),
-            tags=[rule.category if hasattr(rule, "category") else "sast"],
+            tags=tags,
         )
