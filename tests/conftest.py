@@ -1,0 +1,58 @@
+"""Shared pytest fixtures."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from argus.core.config import Config
+from argus.core.project import Project
+from argus.plugins import register_builtins
+
+register_builtins()
+
+
+@pytest.fixture
+def vulnerable_project(tmp_path: Path) -> Project:
+    """A tiny project with one planted vulnerability of each major class."""
+    (tmp_path / "app.py").write_text(
+        'import hashlib, subprocess, yaml\n'
+        'from flask import Flask, request\n'
+        'app = Flask(__name__)\n'
+        'AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"\n'
+        '@app.route("/user")\n'
+        'def q():\n'
+        '    uid = request.args.get("id")\n'
+        '    cursor.execute("SELECT * FROM users WHERE id = \'%s\'" % uid)\n'
+        '@app.route("/ping")\n'
+        'def run():\n'
+        '    subprocess.run("ping " + request.args.get("host"), shell=True)\n'
+        'def load(raw):\n'
+        '    return yaml.load(raw)\n'
+        'def h(p):\n'
+        '    return hashlib.md5(p.encode()).hexdigest()\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "requirements.txt").write_text(
+        "flask==2.0.1\npyyaml==5.3.1\n", encoding="utf-8"
+    )
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:latest\nCOPY . /app\nCMD [\"python\", \"app.py\"]\n",
+        encoding="utf-8",
+    )
+    return Project.from_path(tmp_path)
+
+
+@pytest.fixture
+def clean_project(tmp_path: Path) -> Project:
+    """A project with no planted vulnerabilities."""
+    (tmp_path / "main.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
+    return Project.from_path(tmp_path)
+
+
+@pytest.fixture
+def default_config() -> Config:
+    return Config()

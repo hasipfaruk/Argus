@@ -1,0 +1,77 @@
+{
+  "_comment": "Minimal offline advisory dataset for the dependency scanner. Real deployments sync this from OSV/GitHub Advisory data via a plugin; this seed set makes the scanner useful out of the box and gives tests deterministic input. Version ranges use simple comparison semantics handled by the scanner.",
+  "advisories": [
+    {
+      "id": "GHSA-argus-0001",
+      "ecosystem": "PyPI",
+      "package": "flask",
+      "vulnerable": "<2.2.5",
+      "cve": "CVE-2023-30861",
+      "severity": "HIGH",
+      "title": "Flask session cookie disclosure via caching proxies",
+      "summary": "Responses may be cached and served to other users when a proxy caches Set-Cookie under certain configurations, leaking session cookies.",
+      "fixed": "2.2.5",
+      "cwe": ["CWE-539"]
+    },
+    {
+      "id": "GHSA-argus-0002",
+      "ecosystem": "PyPI",
+      "package": "requests",
+      "vulnerable": "<2.31.0",
+      "cve": "CVE-2023-32681",
+      "severity": "MEDIUM",
+      "title": "Requests leaks Proxy-Authorization header on redirect",
+      "summary": "The Proxy-Authorization header is forwarded to the destination server on cross-origin redirects, exposing proxy credentials.",
+      "fixed": "2.31.0",
+      "cwe": ["CWE-200"]
+    },
+    {
+      "id": "GHSA-argus-0003",
+      "ecosystem": "PyPI",
+      "package": "pyyaml",
+      "vulnerable": "<5.4",
+      "cve": "CVE-2020-14343",
+      "severity": "CRITICAL",
+      "title": "PyYAML arbitrary code execution via full_load",
+      "summary": "Untrusted YAML processed with the default loader can execute arbitrary code.",
+      "fixed": "5.4",
+      "cwe": ["CWE-502"]
+    },
+    {
+      "id": "GHSA-argus-0004",
+      "ecosystem": "npm",
+      "package": "lodash",
+      "vulnerable": "<4.17.21",
+      "cve": "CVE-2021-23337",
+      "severity": "HIGH",
+      "title": "Lodash command injection via template",
+      "summary": "Prototype pollution / command injection through the template function in versions before 4.17.21.",
+      "fixed": "4.17.21",
+      "cwe": ["CWE-77"]
+    },
+    {
+      "id": "GHSA-argus-0005",
+      "ecosystem": "npm",
+      "package": "axios",
+      "vulnerable": "<1.6.0",
+      "cve": "CVE-2023-45857",
+      "severity": "MEDIUM",
+      "title": "Axios SSRF / credential leak via redirects",
+      "summary": "Axios could leak confidential data through cross-site request forgery when following redirects before 1.6.0.",
+      "fixed": "1.6.0",
+      "cwe": ["CWE-918"]
+    },
+    {
+      "id": "GHSA-argus-0006",
+      "ecosystem": "npm",
+      "package": "minimist",
+      "vulnerable": "<1.2.6",
+      "cve": "CVE-2021-44906",
+      "severity": "CRITICAL",
+      "title": "Minimist prototype pollution",
+      "summary": "Prototype pollution allowing modification of Object.prototype before 1.2.6.",
+      "fixed": "1.2.6",
+      "cwe": ["CWE-1321"]
+    }
+  ]
+}

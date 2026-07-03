@@ -1,0 +1,43 @@
+# Example: run Argus on every push/PR and upload results to GitHub Code Scanning.
+#
+# Copy this into your own repository's .github/workflows/ to get Argus findings
+# as annotations on pull requests and in the Security tab. The SARIF upload maps
+# Argus severities onto GitHub's alert levels.
+name: Argus Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF
+
+jobs:
+  argus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Argus
+        run: pip install argus-sec
+
+      - name: Run Argus
+        # Do not fail the job here; let the SARIF upload surface findings.
+        # Set --fail-on high to block merges on High+ instead.
+        run: argus scan . -f sarif -o argus.sarif --quiet
+        env:
+          # Optional: use a cloud model for richer analysis. Omit to run offline.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Upload SARIF to Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: argus.sarif
+          category: argus
