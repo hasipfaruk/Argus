@@ -29,9 +29,10 @@ Examples of unacceptable behavior:
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainer. All complaints will be reviewed and
-investigated promptly and fairly. The maintainer is obligated to respect the
-privacy and security of the reporter of any incident.
+reported to the project maintainers at haseebfarooq35@gmail.com or
+abdullah@devfactory.io. All complaints will be reviewed and investigated promptly
+and fairly. The maintainers are obligated to respect the privacy and security of
+the reporter of any incident.
 
 ## Attribution
 

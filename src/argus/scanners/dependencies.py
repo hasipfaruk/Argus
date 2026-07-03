@@ -100,6 +100,42 @@ _PARSERS = {
 }
 
 
+def _dedupe_by_cve(advisories: list[dict]) -> list[dict]:
+    """Collapse advisories that describe the same CVE, keeping the most severe.
+
+    OSV often returns several records (e.g. a GHSA and a PYSEC entry) aliasing one
+    CVE. Reporting them once — at the highest assessed severity — keeps the output
+    clean. Advisories without a CVE are keyed by their own id and never merged.
+    """
+    best: dict[str, dict] = {}
+    order: list[str] = []
+    for adv in advisories:
+        key = adv.get("cve") or adv.get("id", "")
+        current = best.get(key)
+        if current is None:
+            best[key] = adv
+            order.append(key)
+        elif Severity.parse(adv.get("severity", "MEDIUM")) > \
+                Severity.parse(current.get("severity", "MEDIUM")):
+            best[key] = adv
+    return [best[k] for k in order]
+
+
+def _osv_to_dict(adv, ecosystem: str) -> dict:
+    """Normalize an OSVAdvisory into the dict shape the finding builder consumes."""
+    return {
+        "id": adv.id,
+        "cve": adv.cve,
+        "severity": adv.severity,
+        "summary": adv.summary,
+        "title": adv.summary,
+        "fixed": adv.fixed or "",
+        "cwe": adv.cwe,
+        "ecosystem": ecosystem,
+        "references": adv.references,
+    }
+
+
 @scanner
 class DependencyScanner(Scanner):
     name = "dependencies"
@@ -110,24 +146,60 @@ class DependencyScanner(Scanner):
         return bool(project.files_matching(*_PARSERS.keys()))
 
     def scan(self, ctx: ScannerContext) -> Iterable[Finding]:
-        advisories = _load_advisories()
+        opts = ctx.config.options_for(self.name)
+        online = bool(opts.get("online", True))
+        timeout = float(opts.get("timeout", 15.0))
         counter = 0
+
+        # Collect declared dependencies per ecosystem, keeping every location.
+        per_eco: dict[str, list[tuple[str, str, str]]] = {}  # eco -> [(path,pkg,ver)]
         for manifest_name, (ecosystem, parser) in _PARSERS.items():
             for f in ctx.project.files_matching(manifest_name):
-                deps = parser(f.text())
-                for pkg, version in deps.items():
-                    for adv in advisories:
-                        if adv["ecosystem"] != ecosystem or adv["package"] != pkg:
-                            continue
-                        if _matches_range(version, adv["vulnerable"]):
-                            counter += 1
-                            yield self._finding(adv, counter, f.rel_path, pkg, version)
+                for pkg, version in parser(f.text()).items():
+                    per_eco.setdefault(ecosystem, []).append((f.rel_path, pkg, version))
+
+        for ecosystem, entries in per_eco.items():
+            osv_map, source = self._resolve_source(ecosystem, entries, online, timeout)
+            for path, pkg, version in entries:
+                if source == "osv":
+                    advisories = [_osv_to_dict(a, ecosystem)
+                                  for a in osv_map.get((pkg, version), [])]
+                else:
+                    advisories = self._bundled_matches(ecosystem, pkg, version)
+                for adv in _dedupe_by_cve(advisories):
+                    counter += 1
+                    yield self._finding(adv, counter, path, pkg, version)
+
+    def _resolve_source(self, ecosystem, entries, online, timeout):
+        """Return (osv_map, source). Prefer live OSV; fall back to the bundled seed."""
+        if not online:
+            return {}, "bundled"
+        deps = {pkg: version for _, pkg, version in entries}
+        try:
+            from argus.scanners import osv
+            return osv.query(ecosystem, deps, timeout=timeout), "osv"
+        except Exception:
+            # Any failure (offline, timeout, API change) -> deterministic bundled seed.
+            return {}, "bundled"
+
+    @staticmethod
+    def _bundled_matches(ecosystem: str, pkg: str, version: str) -> list[dict]:
+        out = []
+        for adv in _load_advisories():
+            if adv["ecosystem"] == ecosystem and adv["package"] == pkg \
+                    and _matches_range(version, adv["vulnerable"]):
+                out.append(adv)
+        return out
 
     def _finding(self, adv: dict, index: int, path: str, pkg: str,
                  version: str) -> Finding:
         sev = Severity.parse(adv.get("severity", "MEDIUM"))
         cve = adv.get("cve", "")
         fixed = adv.get("fixed", "")
+        references = [r for r in adv.get("references", []) if r] or [
+            f"https://nvd.nist.gov/vuln/detail/{cve}" if cve else "",
+            f"https://github.com/advisories/{adv['id']}",
+        ]
         return Finding(
             id=f"{self.name}:{adv['id']}:{index}",
             rule_id=f"{self.name}.{adv['id']}",
@@ -159,10 +231,7 @@ class DependencyScanner(Scanner):
                     f"{fixed or 'the latest patched release'} and re-run tests. "
                     "Review the advisory for any required migration steps."
                 ),
-                references=[
-                    f"https://nvd.nist.gov/vuln/detail/{cve}" if cve else "",
-                    f"https://github.com/advisories/{adv['id']}",
-                ],
+                references=references,
             ),
             tags=["dependency", adv.get("ecosystem", "")],
             metadata={"cve": cve, "fixed_version": fixed, "installed_version": version},

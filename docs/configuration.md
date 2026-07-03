@@ -48,7 +48,20 @@ scanner_options:
   secrets:
     entropy: true             # enable high-entropy string detection
     entropy_threshold: 4.0    # bits; raise to reduce false positives
+  dependencies:
+    online: true              # query the OSV database for real, current CVEs
+    timeout: 15               # seconds for OSV lookups
 ```
+
+## Dependency scanning and OSV
+
+The dependency scanner checks your declared packages against the public
+[OSV database](https://osv.dev), which covers thousands of advisories across
+ecosystems. Only **package names and versions** are sent to OSV — never your
+source code — so this preserves Argus's offline-first stance. Set
+`scanner_options.dependencies.online: false` to use only the small bundled seed
+(fully offline); Argus also falls back to the seed automatically if OSV is
+unreachable.
 
 ## Common recipes
 

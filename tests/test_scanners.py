@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 from argus.core.config import Config
+from argus.core.models import Severity
 from argus.core.plugin import ScannerContext, registry
 from argus.scanners.dependencies import _matches_range, _parse_requirements
 from argus.scanners.secrets import _shannon_entropy
 
 
-def _run(scanner_name: str, project) -> list:
+def _run(scanner_name: str, project, config: Config | None = None) -> list:
     from argus.analysis.repository import RepositoryAnalyzer
 
     RepositoryAnalyzer().analyze(project)
     cls = registry.get_scanner(scanner_name)
-    ctx = ScannerContext(project=project, config=Config(), ai=None)
+    ctx = ScannerContext(project=project, config=config or Config(), ai=None)
     return list(cls().scan(ctx))
+
+
+def _offline_config() -> Config:
+    """Force the dependency scanner to use the bundled seed (deterministic tests)."""
+    return Config(scanner_options={"dependencies": {"online": False}})
 
 
 def test_secrets_finds_aws_key(vulnerable_project):
@@ -47,9 +53,43 @@ def test_patterns_carry_cwe_and_reasoning(vulnerable_project):
 
 
 def test_dependencies_flags_known_cve(vulnerable_project):
-    findings = _run("dependencies", vulnerable_project)
+    # Offline mode uses the deterministic bundled advisory seed.
+    findings = _run("dependencies", vulnerable_project, _offline_config())
     pkgs = {f.metadata.get("cve") for f in findings}
     assert "CVE-2020-14343" in pkgs  # pyyaml 5.3.1
+
+
+def test_dependencies_uses_osv_when_online(monkeypatch, vulnerable_project):
+    """When online, findings come from OSV; failures fall back to the seed."""
+    from argus.scanners import osv
+
+    fake = {
+        ("flask", "2.0.1"): [osv.OSVAdvisory(
+            id="GHSA-fake-flask", summary="Fake Flask issue", severity=Severity.HIGH,
+            cve="CVE-9999-0001", fixed="2.3.0", cwe=["CWE-79"],
+            references=["https://example.com/adv"],
+        )],
+    }
+    monkeypatch.setattr(osv, "query", lambda eco, deps, **kw: fake)
+
+    findings = _run("dependencies", vulnerable_project)  # online default
+    cves = {f.metadata.get("cve") for f in findings}
+    assert "CVE-9999-0001" in cves
+    flask_finding = next(f for f in findings if f.metadata.get("cve") == "CVE-9999-0001")
+    assert flask_finding.severity == Severity.HIGH
+    assert flask_finding.metadata["fixed_version"] == "2.3.0"
+
+
+def test_dependencies_falls_back_when_osv_errors(monkeypatch, vulnerable_project):
+    from argus.scanners import osv
+
+    def boom(*a, **k):
+        raise osv.OSVError("network down")
+
+    monkeypatch.setattr(osv, "query", boom)
+    findings = _run("dependencies", vulnerable_project)  # online, but OSV fails
+    # Falls back to the bundled seed, so the known pyyaml CVE still appears.
+    assert "CVE-2020-14343" in {f.metadata.get("cve") for f in findings}
 
 
 def test_iac_flags_root_container(vulnerable_project):

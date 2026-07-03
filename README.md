@@ -22,9 +22,9 @@ issue.
 - **Understands the project first.** Detects languages and frameworks and builds
   an architecture map — APIs, auth flows, datastores, third-party services, cloud,
   containers, CI/CD, and dependency manifests — before scanning.
-- **Layered analysis.** Secret detection, dependency vulnerabilities, static code
-  analysis (SAST), and infrastructure-as-code checks out of the box, extensible to
-  more via plugins.
+- **Layered analysis.** Secret detection, dependency vulnerabilities (checked
+  against the live [OSV](https://osv.dev) database), static code analysis (SAST),
+  and infrastructure-as-code checks out of the box, extensible via plugins.
 - **Findings that teach.** Every finding carries reasoning, taxonomy mappings, and
   remediation — not just a line number.
 - **Attack Simulation Mode.** Instead of "this is vulnerable", Argus produces a

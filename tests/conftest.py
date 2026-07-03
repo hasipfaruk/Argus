@@ -13,6 +13,22 @@ from argus.plugins import register_builtins
 register_builtins()
 
 
+@pytest.fixture(autouse=True)
+def _offline_osv(monkeypatch):
+    """Keep the whole suite offline and deterministic.
+
+    The dependency scanner queries OSV over the network by default. In tests we
+    force that to fail so it falls back to the bundled advisory seed. Tests that
+    specifically exercise OSV override this with their own monkeypatch.
+    """
+    from argus.scanners import osv
+
+    def _raise(*args, **kwargs):
+        raise osv.OSVError("network disabled in tests")
+
+    monkeypatch.setattr(osv, "query", _raise)
+
+
 @pytest.fixture
 def vulnerable_project(tmp_path: Path) -> Project:
     """A tiny project with one planted vulnerability of each major class."""

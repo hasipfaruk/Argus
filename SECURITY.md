@@ -5,7 +5,7 @@
 If you discover a security vulnerability in Argus itself, please report it
 privately. Do **not** open a public issue.
 
-- Email: security@argus-security.example (replace with the project's real contact)
+- Email: haseebfarooq35@gmail.com or abdullah@devfactory.io
 - Or use GitHub's private "Report a vulnerability" advisory flow on the repository.
 
 Please include a description, reproduction steps, and the affected version. We aim
