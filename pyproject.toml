@@ -77,6 +77,9 @@ addopts = "-ra"
 line-length = 100
 target-version = "py310"
 src = ["src", "tests"]
+# The example app contains deliberately insecure, non-idiomatic code so the
+# scanners have something to find. Linting it is meaningless — exclude it.
+extend-exclude = ["examples"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

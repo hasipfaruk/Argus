@@ -25,12 +25,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install Argus
-        run: pip install argus-sec
+        # This repo installs Argus from its own source. In your own project,
+        # replace this with `pip install argus-sec` once Argus is on PyPI.
+        run: pip install .
 
       - name: Run Argus
         # Do not fail the job here; let the SARIF upload surface findings.
         # Set --fail-on high to block merges on High+ instead.
-        run: argus scan . -f sarif -o argus.sarif --quiet
+        run: argus scan src -f sarif -o argus.sarif --quiet
         env:
           # Optional: use a cloud model for richer analysis. Omit to run offline.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
