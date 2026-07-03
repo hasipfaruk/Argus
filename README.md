@@ -188,9 +188,17 @@ collaboration), and richer compliance rule packs.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions of scanners, language
-support, compliance rules, and report formats are especially welcome — the plugin
-model means most additions never touch the core.
+Contributions are welcome from everyone. The flow is the standard one:
+
+1. **Fork** this repository.
+2. Create a branch and make your change (with tests).
+3. Open a **pull request** — the template will guide you, and CI runs tests and
+   lint automatically.
+
+Scanners, language support, compliance rules, and report formats are especially
+welcome — the plugin model means most additions never touch the core. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup and standards, and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community guidelines.
 
 ## License
 

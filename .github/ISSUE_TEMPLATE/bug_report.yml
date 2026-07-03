@@ -1,0 +1,58 @@
+name: Bug report
+description: Report something that isn't working as expected in Argus.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill in the sections below.
+        For a security vulnerability *in Argus itself*, do not open a public issue —
+        see SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected instead.
+      placeholder: When I run `argus scan ...`, I expected X but got Y.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command(s) and, if possible, a minimal example.
+      placeholder: |
+        1. argus scan ./my-project -s secrets
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output / error
+      description: Paste the relevant output. This is automatically formatted as code.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Argus version
+      description: Output of `argus version`.
+      placeholder: Argus v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.11"

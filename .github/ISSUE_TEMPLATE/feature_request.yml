@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a new scanner, rule, report format, or capability.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case or the gap you're hitting.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you'd like Argus to do. If it's a new scanner/rule, note the
+        language and the vulnerability class (and a CWE if you know it).
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New scanner or rule
+        - New language support
+        - New report format
+        - AI provider
+        - CLI / usability
+        - Fix / pull-request workflow
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about, or how you work around this today.
