@@ -41,19 +41,22 @@ issue.
 ## Install
 
 ```bash
-# From source (recommended during alpha)
-git clone https://github.com/argus-security/argus
-cd argus
-pip install -e .
+# From PyPI
+pip install argus-appsec
 
 # With cloud model support
-pip install -e ".[anthropic,openai]"
+pip install "argus-appsec[anthropic,openai]"
+```
 
-# For development (tests, linters)
+From source (for development):
+
+```bash
+git clone https://github.com/hasipfaruk/Argus
+cd Argus
 pip install -e ".[dev]"
 ```
 
-Requires Python 3.10+.
+Requires Python 3.10+. The command installed is `argus`.
 
 ## Quick start
 

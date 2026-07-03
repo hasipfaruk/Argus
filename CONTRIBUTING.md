@@ -7,7 +7,7 @@ plugins and never touch the core. That keeps the barrier low and the core stable
 ## Getting set up
 
 ```bash
-git clone https://github.com/argus-security/argus
+git clone https://github.com/hasipfaruk/Argus
 cd argus
 python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
@@ -41,7 +41,7 @@ first.
 - **Every finding must carry a CWE and OWASP mapping** and, ideally, the reasoning
   fields so it is useful without a model.
 - **Keep the core dependency-light.** New heavy dependencies belong behind an
-  optional extra (`pip install argus-sec[...]`), like the cloud providers.
+  optional extra (`pip install argus-appsec[...]`), like the cloud providers.
 - **Match the house style.** Ruff enforces formatting and imports; follow the
   patterns in the existing scanners.
 

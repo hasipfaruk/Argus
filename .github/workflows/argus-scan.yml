@@ -26,7 +26,7 @@ jobs:
 
       - name: Install Argus
         # This repo installs Argus from its own source. In your own project,
-        # replace this with `pip install argus-sec` once Argus is on PyPI.
+        # replace this with `pip install argus-appsec` once Argus is on PyPI.
         run: pip install .
 
       - name: Run Argus

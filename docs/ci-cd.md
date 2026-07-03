@@ -26,7 +26,7 @@ present.
 argus:
   image: python:3.12-slim
   script:
-    - pip install argus-sec
+    - pip install argus-appsec
     - argus scan . -f sarif -o gl-argus.sarif --fail-on high
   artifacts:
     when: always

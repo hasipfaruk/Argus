@@ -3,7 +3,7 @@ requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
 [project]
-name = "argus-sec"
+name = "argus-appsec"
 version = "0.1.0"
 description = "An open-source AI Security Engineer: maps your application, finds vulnerabilities, explains them, and proposes verified fixes."
 readme = "README.md"
@@ -53,10 +53,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/argus-security/argus"
-Documentation = "https://github.com/argus-security/argus/tree/main/docs"
-Repository = "https://github.com/argus-security/argus"
-Issues = "https://github.com/argus-security/argus/issues"
+Homepage = "https://github.com/hasipfaruk/Argus"
+Documentation = "https://github.com/hasipfaruk/Argus/tree/main/docs"
+Repository = "https://github.com/hasipfaruk/Argus"
+Issues = "https://github.com/hasipfaruk/Argus/issues"
 
 [project.scripts]
 argus = "argus.cli.main:app"

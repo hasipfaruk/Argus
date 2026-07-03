@@ -56,7 +56,7 @@ class SARIFReporter(Reporter):
                     "tool": {
                         "driver": {
                             "name": "Argus",
-                            "informationUri": "https://github.com/argus-security/argus",
+                            "informationUri": "https://github.com/hasipfaruk/Argus",
                             "version": __version__,
                             "rules": list(rules.values()),
                         }
