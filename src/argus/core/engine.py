@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from argus import __version__
 from argus.agents import (
@@ -31,6 +32,9 @@ from argus.core.config import Config
 from argus.core.models import Finding, ScanResult
 from argus.core.plugin import Scanner, ScannerContext, registry
 from argus.core.project import Project
+
+if TYPE_CHECKING:
+    from argus.ai.base import AIProvider
 
 # A callback the CLI uses to render progress. No-op by default.
 ProgressFn = Callable[[str], None]
@@ -74,12 +78,13 @@ class ScanEngine:
             except Exception as exc:  # a broken scanner must not sink the scan
                 result.errors.append(f"scanner '{scanner.name}' failed: {exc}")
 
-        # 3. Enrich (agents)
+        # 3. Filter, then enrich. Filtering first means agents (and any paid model
+        # calls they make) only run on findings we will actually report.
+        result.findings = self._filter(result.findings)
         if self.config.ai.enabled:
             self._run_agents(result, project, ai)
 
         # 4. Assemble
-        result.findings = self._filter(result.findings)
         result.findings = result.sorted_findings()
         result.finished_at = datetime.now(timezone.utc)
         self._progress(
@@ -91,6 +96,7 @@ class ScanEngine:
     # --- steps --------------------------------------------------------------
     def _select_scanners(self, project: Project) -> list[Scanner]:
         available = registry.scanners()
+        explicit = bool(self.config.scanners)
         chosen_names = self.config.scanners or list(available)
         selected: list[Scanner] = []
         for name in chosen_names:
@@ -98,6 +104,13 @@ class ScanEngine:
                 continue
             cls = available.get(name)
             if cls is None:
+                # Only warn for names the user asked for explicitly; the "all"
+                # default is derived from the registry and can't contain unknowns.
+                if explicit:
+                    self._progress(
+                        f"Unknown scanner '{name}' (available: "
+                        f"{', '.join(sorted(available))})."
+                    )
                 continue
             instance = cls()
             if instance.applies_to(project):
@@ -106,7 +119,8 @@ class ScanEngine:
                 self._progress(f"Skipping scanner '{name}' (not applicable).")
         return selected
 
-    def _run_agents(self, result: ScanResult, project: Project, ai) -> None:
+    def _run_agents(self, result: ScanResult, project: Project,
+                    ai: AIProvider) -> None:
         agent_ctx = AgentContext(project=project, config=self.config, ai=ai)
         enrichment = EnrichmentAgent()
         simulator = AttackSimulationAgent()

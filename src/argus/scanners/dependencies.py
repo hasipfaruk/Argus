@@ -1,9 +1,23 @@
 """Dependency vulnerability scanner.
 
-Parses dependency manifests for the common ecosystems, then matches declared
-versions against a bundled advisory database (``data/advisories.json``). The
-database ships as a small seed set so the scanner is useful offline; a plugin can
-replace or extend it by syncing from OSV or the GitHub Advisory Database.
+Parses dependency manifests **and lock files** for the common ecosystems, then
+matches declared versions against live OSV data (falling back to a bundled
+advisory seed, ``data/advisories.json``). Lock files matter because they pin the
+full *transitive* dependency tree with exact versions — which is where most real
+dependency risk lives — whereas top-level manifests only list direct deps and
+often use loose ranges.
+
+Supported inputs:
+
+* PyPI      — ``requirements.txt`` (``==`` pins), ``poetry.lock``, ``Pipfile.lock``.
+* npm       — ``package.json`` (direct), ``package-lock.json``, ``yarn.lock``.
+* Go        — ``go.mod``.
+* crates.io — ``Cargo.lock``.
+* RubyGems  — ``Gemfile.lock``.
+* Packagist — ``composer.lock``.
+
+New ecosystems match against live OSV data (the bundled seed only covers
+PyPI/npm), so they require network access to surface findings.
 
 Version comparison is intentionally lightweight — enough to evaluate the simple
 ``<x.y.z`` ranges the seed data uses, without pulling in a full SemVer engine.
@@ -80,11 +94,19 @@ def _parse_requirements(text: str) -> dict[str, str]:
     return deps
 
 
+def _loads(text: str) -> dict | None:
+    """Parse JSON tolerantly: strips a UTF-8 BOM (common in Windows-authored files)
+    and returns None instead of raising on malformed input."""
+    try:
+        return json.loads(text.lstrip("\ufeff"))
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
 def _parse_package_json(text: str) -> dict[str, str]:
     deps: dict[str, str] = {}
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
+    data = _loads(text)
+    if not isinstance(data, dict):
         return deps
     for key in ("dependencies", "devDependencies", "optionalDependencies"):
         for name, ver in (data.get(key) or {}).items():
@@ -94,9 +116,169 @@ def _parse_package_json(text: str) -> dict[str, str]:
     return deps
 
 
+def _parse_package_lock(text: str) -> dict[str, str]:
+    """npm ``package-lock.json`` — full transitive tree (lockfileVersion 1/2/3)."""
+    deps: dict[str, str] = {}
+    data = _loads(text)
+    if not isinstance(data, dict):
+        return deps
+
+    packages = data.get("packages")
+    if isinstance(packages, dict):  # lockfileVersion 2/3
+        for key, meta in packages.items():
+            if not key or not isinstance(meta, dict):
+                continue  # "" is the project root
+            name = key.split("node_modules/")[-1]
+            ver = str(meta.get("version", ""))
+            if name and re.match(r"^\d", ver):
+                deps.setdefault(name.lower(), ver)
+
+    def _walk(tree: object) -> None:  # lockfileVersion 1
+        if not isinstance(tree, dict):
+            return
+        for name, meta in tree.items():
+            if not isinstance(meta, dict):
+                continue
+            ver = str(meta.get("version", ""))
+            if re.match(r"^\d", ver):
+                deps.setdefault(name.lower(), ver)
+            _walk(meta.get("dependencies"))
+
+    if not packages:
+        _walk(data.get("dependencies"))
+    return deps
+
+
+def _parse_yarn_lock(text: str) -> dict[str, str]:
+    """yarn.lock (classic v1 and berry) — resolved versions per package."""
+    deps: dict[str, str] = {}
+    names: list[str] = []
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        if not raw[0].isspace() and raw.rstrip().endswith(":"):
+            names = []
+            for spec in raw.rstrip()[:-1].split(","):
+                spec = spec.strip().strip('"')
+                at = spec.rfind("@")  # keep scoped @scope/name; drop the range
+                name = spec[:at] if at > 0 else spec
+                if name:
+                    names.append(name.lower())
+        else:
+            m = re.match(r'\s+version:?\s+"?([0-9][^"\s]*)"?', raw)
+            if m and names:
+                for name in names:
+                    deps.setdefault(name, m.group(1))
+                names = []
+    return deps
+
+
+def _parse_toml_packages(text: str) -> dict[str, str]:
+    """TOML lock files with ``[[package]]`` entries — poetry.lock and Cargo.lock."""
+    deps: dict[str, str] = {}
+    current: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line == "[[package]]":
+            current = None
+            continue
+        m = re.match(r'name\s*=\s*"([^"]+)"', line)
+        if m:
+            current = m.group(1)
+            continue
+        m = re.match(r'version\s*=\s*"([^"]+)"', line)
+        if m and current:
+            deps.setdefault(current, m.group(1))
+            current = None
+    return deps
+
+
+# Back-compat alias (poetry.lock shares the [[package]] shape).
+_parse_poetry_lock = _parse_toml_packages
+
+
+def _parse_go_mod(text: str) -> dict[str, str]:
+    """go.mod — module requirements (both block and single-line ``require``)."""
+    deps: dict[str, str] = {}
+    in_block = False
+    for raw in text.splitlines():
+        line = raw.split("//", 1)[0].strip()  # drop `// indirect` and comments
+        if not line:
+            continue
+        if line.startswith("require (") or line == "require(":
+            in_block = True
+            continue
+        if in_block and line == ")":
+            in_block = False
+            continue
+        if line.startswith("require "):
+            line = line[len("require "):].strip()
+        elif not in_block:
+            continue
+        m = re.match(r"^(\S+)\s+v([0-9][\w.\-]*)", line)
+        if m:
+            deps.setdefault(m.group(1), m.group(2))  # Go paths are case-sensitive
+    return deps
+
+
+def _parse_gemfile_lock(text: str) -> dict[str, str]:
+    """Gemfile.lock — resolved gem specs (4-space indented ``name (version)``)."""
+    deps: dict[str, str] = {}
+    for raw in text.splitlines():
+        m = re.match(r"^ {4}([A-Za-z0-9_.\-]+) \(([0-9][^)]*)\)\s*$", raw)
+        if m:
+            deps.setdefault(m.group(1), m.group(2))
+    return deps
+
+
+def _parse_composer_lock(text: str) -> dict[str, str]:
+    """composer.lock — Packagist packages (runtime and dev)."""
+    deps: dict[str, str] = {}
+    data = _loads(text)
+    if not isinstance(data, dict):
+        return deps
+    for section in ("packages", "packages-dev"):
+        for entry in data.get(section) or []:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name", "")
+            ver = str(entry.get("version", "")).lstrip("v").strip()
+            if name and re.match(r"^\d", ver):
+                deps.setdefault(name, ver)
+    return deps
+
+
+def _parse_pipfile_lock(text: str) -> dict[str, str]:
+    """Pipfile.lock — default and develop dependency sections."""
+    deps: dict[str, str] = {}
+    data = _loads(text)
+    if not isinstance(data, dict):
+        return deps
+    for section in ("default", "develop"):
+        for name, meta in (data.get(section) or {}).items():
+            if not isinstance(meta, dict):
+                continue
+            ver = str(meta.get("version", "")).lstrip("=<>~ ").strip()
+            if re.match(r"^\d", ver):
+                deps.setdefault(name.lower(), ver)
+    return deps
+
+
+# Manifest/lock file name -> (ecosystem, parser). Lock files first so their exact,
+# transitive versions win the per-(package, version) de-duplication below.
 _PARSERS = {
+    # Lock files first per ecosystem so a dependency present in both a lock file
+    # and a manifest is reported at the (pinned, transitive) lock-file location.
+    "poetry.lock": ("PyPI", _parse_poetry_lock),
+    "Pipfile.lock": ("PyPI", _parse_pipfile_lock),
     "requirements.txt": ("PyPI", _parse_requirements),
+    "package-lock.json": ("npm", _parse_package_lock),
+    "yarn.lock": ("npm", _parse_yarn_lock),
     "package.json": ("npm", _parse_package_json),
+    "go.mod": ("Go", _parse_go_mod),
+    "Cargo.lock": ("crates.io", _parse_toml_packages),
+    "Gemfile.lock": ("RubyGems", _parse_gemfile_lock),
+    "composer.lock": ("Packagist", _parse_composer_lock),
 }
 
 
@@ -151,14 +333,19 @@ class DependencyScanner(Scanner):
         timeout = float(opts.get("timeout", 15.0))
         counter = 0
 
-        # Collect declared dependencies per ecosystem, keeping every location.
-        per_eco: dict[str, list[tuple[str, str, str]]] = {}  # eco -> [(path,pkg,ver)]
+        # Collect declared dependencies per ecosystem, de-duplicating by
+        # (package, version) so a dependency listed in both a manifest and a lock
+        # file is scanned and reported once. Lock files are processed first (see
+        # _PARSERS ordering), so the reported location prefers the lock file.
+        per_eco: dict[str, dict[tuple[str, str], tuple[str, str, str]]] = {}
         for manifest_name, (ecosystem, parser) in _PARSERS.items():
             for f in ctx.project.files_matching(manifest_name):
                 for pkg, version in parser(f.text()).items():
-                    per_eco.setdefault(ecosystem, []).append((f.rel_path, pkg, version))
+                    bucket = per_eco.setdefault(ecosystem, {})
+                    bucket.setdefault((pkg, version), (f.rel_path, pkg, version))
 
-        for ecosystem, entries in per_eco.items():
+        for ecosystem, bucket in per_eco.items():
+            entries = list(bucket.values())
             osv_map, source = self._resolve_source(ecosystem, entries, online, timeout)
             for path, pkg, version in entries:
                 if source == "osv":

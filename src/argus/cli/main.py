@@ -87,8 +87,17 @@ def scan(
     fail_on: str | None = typer.Option(
         None, "--fail-on", help="Exit non-zero if any finding is at/above this severity."
     ),
+    baseline: Path | None = typer.Option(
+        None, "--baseline",
+        help="Path to a previous Argus JSON report; report only findings not in it.",
+    ),
     branch: str | None = typer.Option(
         None, "--branch", "-b", help="Branch to clone for remote targets."
+    ),
+    trust_remote_config: bool = typer.Option(
+        False, "--trust-remote-config",
+        help="Load .argus.yml from a cloned remote repo (off by default; a scanned "
+             "repo is untrusted and could suppress its own findings).",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output."),
 ) -> None:
@@ -116,9 +125,21 @@ def scan(
     project = resolved.project
     assert project is not None
 
+    # Security: a cloned remote repository is untrusted. Do not honor a config file
+    # discovered inside it (which could disable scanners or hide paths) unless the
+    # user explicitly opts in. An explicit --config path is always respected.
+    trust_project_config = project.origin == "local" or trust_remote_config
+    if project.origin != "local" and not trust_remote_config and not quiet:
+        err_console.print(
+            "[dim]· Ignoring any .argus.yml inside the remote repo "
+            "(use --trust-remote-config to honor it).[/dim]"
+        )
+
     try:
         cfg = _build_config(
-            config=config, project_root=project.root, scanners=scanners,
+            config=config,
+            project_root=project.root if trust_project_config else None,
+            scanners=scanners,
             exclude=exclude, ai_provider=ai_provider, ai_model=ai_model, no_ai=no_ai,
             attack_sim=attack_sim, patches=patches, min_severity=min_severity,
             fail_on=fail_on,
@@ -127,6 +148,9 @@ def scan(
         progress = None if quiet else (lambda msg: err_console.print(f"[dim]· {msg}[/dim]"))
         engine = ScanEngine(cfg, progress=progress)
         result = engine.scan(project)
+
+        if baseline is not None:
+            _apply_baseline(result, baseline, quiet=quiet)
 
         _emit(result, fmt, output)
 
@@ -191,7 +215,10 @@ def fix(
 
     project = resolved.project
     try:
-        cfg = Config.load(project_root=project.root)
+        # Only honor an in-repo config for local targets (a cloned repo is untrusted).
+        cfg = Config.load(
+            project_root=project.root if project.origin == "local" else None
+        )
         # Fixing is deterministic; AI enrichment is not needed and slows things down.
         cfg.ai.enabled = False
         if scanners_opt:
@@ -276,6 +303,23 @@ def version() -> None:
 
 
 # --- helpers ---------------------------------------------------------------
+def _apply_baseline(result: ScanResult, baseline: Path, *, quiet: bool) -> None:
+    """Drop findings already present in a baseline report (diff-aware scanning)."""
+    from argus.baseline import BaselineError, filter_new, load_fingerprints
+
+    try:
+        known = load_fingerprints(baseline)
+    except BaselineError as exc:
+        err_console.print(f"[yellow]Baseline ignored:[/yellow] {exc}")
+        return
+    result.findings, suppressed = filter_new(result.findings, known)
+    if not quiet:
+        err_console.print(
+            f"[dim]· Baseline: {suppressed} known finding(s) suppressed, "
+            f"{len(result.findings)} new.[/dim]"
+        )
+
+
 def _build_config(*, config, project_root, scanners, exclude, ai_provider, ai_model,
                   no_ai, attack_sim, patches, min_severity, fail_on) -> Config:
     cfg = Config.load(path=config, project_root=project_root)
@@ -331,6 +375,13 @@ def _print_fix_outcome(outcome, *, open_pr: bool, dry_run: bool) -> None:
 
 
 def _emit(result: ScanResult, formats: list[str], output: Path | None) -> None:
+    # Count file-bound formats (everything except the console table) so we know
+    # whether a single -o file path is enough or we must disambiguate by extension.
+    file_formats = [f for f in formats if f != "table"]
+    treat_as_dir = output is not None and (
+        output.is_dir() or (output.suffix == "" and not output.exists())
+    )
+
     for fmt in formats:
         if fmt == "table":
             _print_table(result)
@@ -340,15 +391,22 @@ def _emit(result: ScanResult, formats: list[str], output: Path | None) -> None:
             err_console.print(f"[yellow]Unknown format '{fmt}', skipping.[/yellow]")
             continue
         rendered = cls().render(result)
+        extension = cls().extension
         if output is None:
             # Write raw to stdout — never through Rich, which would soft-wrap and
             # corrupt machine-readable formats (JSON/SARIF/CSV) when piped.
             sys.stdout.write(rendered)
             if not rendered.endswith("\n"):
                 sys.stdout.write("\n")
-        elif output.is_dir() or len(formats) > 1:
+        elif treat_as_dir:
             output.mkdir(parents=True, exist_ok=True)
-            dest = output / f"argus-report.{cls().extension}"
+            dest = output / f"argus-report.{extension}"
+            dest.write_text(rendered, encoding="utf-8")
+            console.print(f"[green]Wrote {dest}[/green]")
+        elif len(file_formats) > 1:
+            # A single file path was given for several formats: keep the stem and
+            # give each format its own extension (report.html, report.sarif, ...).
+            dest = output.with_suffix(f".{extension}")
             dest.write_text(rendered, encoding="utf-8")
             console.print(f"[green]Wrote {dest}[/green]")
         else:

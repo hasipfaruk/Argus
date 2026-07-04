@@ -10,11 +10,13 @@ still giving accurate results when a network is available. When OSV is
 unreachable, the dependency scanner falls back to the bundled seed.
 
 Efficiency: one batched query returns the vulnerability IDs affecting each
-package/version, then each unique vulnerability's full record is fetched once.
+package/version, then each unique vulnerability's full record is fetched once,
+concurrently across a small thread pool.
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import httpx
@@ -22,6 +24,10 @@ import httpx
 from argus.core.models import Severity
 
 OSV_API = "https://api.osv.dev"
+
+# Cap concurrent OSV record fetches so a large transitive tree stays polite to the
+# public API while still being much faster than one-at-a-time requests.
+_MAX_FETCH_WORKERS = 8
 
 # OSV/GHSA qualitative severity -> Argus severity.
 _SEVERITY_WORD = {
@@ -75,12 +81,20 @@ def query(ecosystem: str, deps: dict[str, str], *, timeout: float = 15.0,
                 per_pkg_ids.append(ids)
                 id_set.update(ids)
 
-            # Fetch each unique vuln record once.
-            records: dict[str, OSVAdvisory] = {}
-            for vid in id_set:
+            # Fetch each unique vuln record once, concurrently. Results are keyed
+            # by id and reassembled in dependency order below, so output stays
+            # deterministic regardless of completion order.
+            def _fetch(vid: str) -> tuple[str, OSVAdvisory | None]:
                 r = client.get(f"{OSV_API}/v1/vulns/{vid}")
-                if r.status_code == 200:
-                    records[vid] = _parse_vuln(r.json())
+                return vid, (_parse_vuln(r.json()) if r.status_code == 200 else None)
+
+            records: dict[str, OSVAdvisory] = {}
+            if id_set:
+                workers = min(_MAX_FETCH_WORKERS, len(id_set))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    for vid, adv in pool.map(_fetch, sorted(id_set)):
+                        if adv is not None:
+                            records[vid] = adv
     except (httpx.HTTPError, ValueError, KeyError) as exc:
         raise OSVError(f"OSV lookup failed: {exc}") from exc
 

@@ -14,6 +14,7 @@ writes each file at most once, even when it fixes several findings in it.
 from __future__ import annotations
 
 import difflib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -92,7 +93,7 @@ def apply_fixes(
 
         newline = "\r\n" if "\r\n" in text else "\n"
         lines = text.splitlines()
-        file_changed = False
+        pending: list[AppliedFix] = []
 
         # Apply the most severe / lowest line first is irrelevant since each fix is
         # confined to its own line; process in line order for determinism.
@@ -117,23 +118,60 @@ def apply_fixes(
                 continue
 
             lines[idx] = fixed
-            file_changed = True
-            report.fixes.append(AppliedFix(
+            pending.append(AppliedFix(
                 path=rel_path, rule_id=finding.rule_id,
                 line=finding.location.start_line or 0,
                 before=original, after=fixed,
                 finding_id=finding.id, verified=verified,
             ))
 
-        if file_changed:
-            report.changed_files.append(rel_path)
-            if not dry_run:
-                new_text = newline.join(lines)
-                if text.endswith(("\n", "\r\n")):
-                    new_text += newline
-                _write(abs_path, new_text)
+        if not pending:
+            continue
+
+        new_text = newline.join(lines)
+        if text.endswith(("\n", "\r\n")):
+            new_text += newline
+
+        # Guard against a rewrite that clears the detection but breaks the file.
+        # For languages we can cheaply parse, reject the whole file's changes if
+        # the result no longer parses.
+        syntax_error = _syntax_error(rel_path, new_text)
+        if syntax_error is not None:
+            report.skipped.append(
+                f"{rel_path}: fix reverted — would introduce a syntax error "
+                f"({syntax_error})")
+            continue
+
+        report.fixes.extend(pending)
+        report.changed_files.append(rel_path)
+        if not dry_run:
+            _write(abs_path, new_text)
 
     return report
+
+
+def _syntax_error(rel_path: str, text: str) -> str | None:
+    """Return a message if applying fixes made ``text`` invalid, else None.
+
+    Languages with a fast, in-tree parser are validated so a rewrite can never
+    write a structurally broken file. Formats without one are trusted, since the
+    line-level rewrites are conservative.
+    """
+    lower = rel_path.lower()
+    try:
+        if lower.endswith(".py"):
+            compile(text, rel_path, "exec")
+        elif lower.endswith(".json"):
+            json.loads(text)
+        elif lower.endswith((".yml", ".yaml")):
+            import yaml
+
+            yaml.safe_load(text)
+    except (SyntaxError, ValueError) as exc:
+        return str(exc)
+    except Exception as exc:  # yaml.YAMLError and friends
+        return str(exc)
+    return None
 
 
 def _write(path: Path, text: str) -> None:

@@ -19,6 +19,33 @@ _SEV_EMOJI = {
 }
 
 
+def _fence(content: str, lang: str = "") -> list[str]:
+    """Wrap untrusted content in a code fence that it cannot break out of.
+
+    Scanned source (snippets, diffs) can itself contain backtick runs; we pick a
+    fence longer than the longest run inside so the block stays intact when the
+    Markdown is rendered (e.g. as a PR comment).
+    """
+    longest = run = 0
+    for ch in content:
+        run = run + 1 if ch == "`" else 0
+        longest = max(longest, run)
+    ticks = "`" * max(3, longest + 1)
+    return [f"{ticks}{lang}", content, ticks]
+
+
+def _inline(text: str) -> str:
+    """Neutralize characters that would break inline code spans, table cells, or
+    the single-line structure of a Markdown bullet."""
+    return (
+        text.replace("\\", "\\\\")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .replace("`", "'")
+        .replace("|", "\\|")
+    )
+
+
 @reporter
 class MarkdownReporter(Reporter):
     name = "markdown"
@@ -80,21 +107,19 @@ class MarkdownReporter(Reporter):
     def _finding(self, index: int, f) -> str:
         emoji = _SEV_EMOJI.get(f.severity, "")
         lines = [
-            f"### {index}. {emoji} {f.title}",
+            f"### {index}. {emoji} {_inline(f.title)}",
             "",
             f"- **Severity:** {f.severity.label} "
             f"(risk {f.risk_score()}/100) · **Confidence:** {f.confidence.label} · "
             f"**Likelihood:** {f.likelihood.label}",
-            f"- **Location:** `{f.location.as_ref()}`",
-            f"- **Scanner/Rule:** `{f.scanner}` / `{f.rule_id}`",
+            f"- **Location:** `{_inline(f.location.as_ref())}`",
+            f"- **Scanner/Rule:** `{_inline(f.scanner)}` / `{_inline(f.rule_id)}`",
         ]
         if f.cwe or f.owasp:
-            lines.append(f"- **Mapping:** {', '.join(f.cwe + f.owasp)}")
+            lines.append(f"- **Mapping:** {_inline(', '.join(f.cwe + f.owasp))}")
         lines.append("")
         if f.location.snippet:
-            lines.append("```")
-            lines.append(f.location.snippet)
-            lines.append("```")
+            lines.extend(_fence(f.location.snippet))
             lines.append("")
         if f.why_vulnerable:
             lines.append(f"**Why it's a vulnerability:** {f.why_vulnerable}")
@@ -118,9 +143,7 @@ class MarkdownReporter(Reporter):
                 status = "✅ verified" if f.remediation.verified else "proposed"
                 lines.append("")
                 lines.append(f"**Suggested patch ({status}):**")
-                lines.append("```diff")
-                lines.append(f.remediation.patch.rstrip())
-                lines.append("```")
+                lines.extend(_fence(f.remediation.patch.rstrip(), "diff"))
             lines.append("")
         return "\n".join(lines)
 
@@ -137,7 +160,7 @@ class MarkdownReporter(Reporter):
         ]
         for label, value in rows:
             if value:
-                lines.append(f"- **{label}:** {value}")
+                lines.append(f"- **{label}:** {_inline(value)}")
         lines.append("")
         lines.append("_Simulation generated in an isolated context; no live target "
                      "was contacted._")

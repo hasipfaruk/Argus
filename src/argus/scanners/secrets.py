@@ -169,6 +169,12 @@ class SecretsScanner(Scanner):
 
     @staticmethod
     def _redact(value: str) -> str:
-        if len(value) <= 8:
+        """Mask a matched secret for reports.
+
+        Reports are often committed or shared, so we reveal only a short leading
+        fragment for identification — never the tail — and disclose the length so
+        the value is still recognizable without being usable.
+        """
+        if len(value) <= 6:
             return "****"
-        return f"{value[:4]}…{value[-2:]} [redacted]"
+        return f"{value[:3]}… [redacted, {len(value)} chars]"

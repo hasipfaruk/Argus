@@ -16,6 +16,7 @@ returned :class:`ResolvedTarget`.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -32,6 +33,14 @@ _HOST_ORIGIN = {
     "gitlab.com": "gitlab",
     "bitbucket.org": "bitbucket",
 }
+
+# Only these transports are ever handed to `git clone`. Git supports others —
+# notably ``ext::`` and ``file://`` — that can execute arbitrary commands during
+# a clone. Because Argus is routinely pointed at untrusted repositories, we allow
+# an explicit safe set and also constrain git itself via GIT_ALLOW_PROTOCOL.
+_ALLOWED_GIT_PROTOCOLS = ("https", "http", "ssh", "git")
+_SAFE_URL = re.compile(r"^(?:https?|ssh|git)://", re.IGNORECASE)
+_SCP_LIKE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:")  # git@host:owner/repo
 
 
 @dataclass
@@ -95,18 +104,37 @@ def resolve(target: str, *, branch: str | None = None) -> ResolvedTarget:
     )
 
 
+def _is_safe_clone_url(url: str) -> bool:
+    """Reject transports (ext::, file://, ...) that let a clone execute code."""
+    return bool(_SAFE_URL.match(url) or _SCP_LIKE.match(url))
+
+
 def _clone(url: str, *, branch: str | None) -> ResolvedTarget:
     if shutil.which("git") is None:
         raise RuntimeError(
             "git is required to scan a remote repository but was not found on PATH."
         )
+    if not _is_safe_clone_url(url):
+        raise ValueError(
+            f"Refusing to clone {url!r}: only https, http, ssh, and git transports "
+            "are allowed."
+        )
     tmp = tempfile.mkdtemp(prefix="argus-clone-")
     cmd = ["git", "clone", "--depth", "1"]
     if branch:
         cmd += ["--branch", branch]
-    cmd += [url, tmp]
+    cmd += ["--", url, tmp]
+    # Defense in depth: constrain git to the safe transports even if a crafted URL
+    # slips past the check above, and stop credential prompts from hanging a scan.
+    env = {
+        **os.environ,
+        "GIT_ALLOW_PROTOCOL": ":".join(_ALLOWED_GIT_PROTOCOLS),
+        "GIT_TERMINAL_PROMPT": "0",
+    }
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
+        subprocess.run(
+            cmd, check=True, capture_output=True, text=True, timeout=300, env=env
+        )
     except subprocess.CalledProcessError as exc:
         shutil.rmtree(tmp, ignore_errors=True)
         raise RuntimeError(f"git clone failed: {exc.stderr.strip()}") from exc

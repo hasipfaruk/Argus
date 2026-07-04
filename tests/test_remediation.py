@@ -90,6 +90,34 @@ def test_apply_fixes_skips_unverifiable_without_flag(tmp_path: Path):
     assert report.skipped
 
 
+def test_syntax_error_helper():
+    from argus.remediation.applier import _syntax_error
+
+    assert _syntax_error("m.py", "x = 1\n") is None
+    assert _syntax_error("m.py", "def (:\n") is not None
+    # Non-Python files are trusted (no cheap parser).
+    assert _syntax_error("m.js", "def (:\n") is None
+
+
+def test_apply_fixes_reverts_syntax_breaking_change(tmp_path: Path, monkeypatch):
+    """A rewrite that clears the detection but breaks the file must be reverted."""
+    import argus.remediation.rewrites as rw
+
+    src = tmp_path / "m.py"
+    original = "x = yaml.load(data)\n"
+    src.write_text(original, encoding="utf-8")
+    from argus.core.project import Project
+
+    # Emit code that no longer trips the detector but is not valid Python.
+    monkeypatch.setitem(rw.REWRITES, "patterns.python-yaml-load", lambda ln: "x = (")
+    project = Project.from_path(tmp_path)
+    report = apply_fixes(project, [_finding("patterns.python-yaml-load", "m.py", 1)])
+
+    assert not report.any_changes
+    assert any("syntax error" in s for s in report.skipped)
+    assert src.read_text(encoding="utf-8") == original  # left untouched
+
+
 # --- remote parsing --------------------------------------------------------
 @pytest.mark.parametrize("url,host,owner,repo", [
     ("https://github.com/octo/repo.git", "github", "octo", "repo"),

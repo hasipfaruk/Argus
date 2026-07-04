@@ -8,6 +8,7 @@ the optional dependency is absent — availability is reported by ``is_available
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from argus.ai.base import AIProvider
 from argus.core.plugin import ai_provider
@@ -20,6 +21,10 @@ class AnthropicProvider(AIProvider):
     # A current, capable default; override via config `ai.model`.
     default_model = "claude-sonnet-5"
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._client: Any | None = None
+
     @classmethod
     def is_available(cls) -> bool:
         if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -30,10 +35,15 @@ class AnthropicProvider(AIProvider):
             return False
         return True
 
-    def complete(self, system: str, user: str) -> str:
-        import anthropic
+    def _get_client(self) -> Any:
+        if self._client is None:
+            import anthropic
 
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+            self._client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        return self._client
+
+    def complete(self, system: str, user: str) -> str:
+        client = self._get_client()
         resp = client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,

@@ -19,29 +19,68 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
+
+def _fix_yaml_load(ln: str) -> str | None:
+    if "yaml.load(" not in ln or "Safe" in ln:
+        return None
+    return ln.replace("yaml.load(", "yaml.safe_load(")
+
+
+def _fix_weak_hash(ln: str) -> str | None:
+    """Upgrade weak hashes to SHA-256, but only at the actual call sites.
+
+    A blanket string replace would corrupt identifiers or strings that merely
+    contain ``md5``/``sha1`` (e.g. a variable named ``md5_util``), so each
+    substitution is anchored to the recognized construction pattern.
+    """
+    replacements = (
+        (r"hashlib\.md5\(", "hashlib.sha256("),
+        (r"hashlib\.sha1\(", "hashlib.sha256("),
+        (r"(createHash\(\s*['\"])md5", r"\1sha256"),
+        (r"(createHash\(\s*['\"])sha1", r"\1sha256"),
+        (r"(MessageDigest\.getInstance\(\s*['\"])MD5", r"\1SHA-256"),
+        (r"(MessageDigest\.getInstance\(\s*['\"])SHA-?1", r"\1SHA-256"),
+    )
+    fixed = ln
+    for pattern, repl in replacements:
+        fixed = re.sub(pattern, repl, fixed, flags=re.IGNORECASE)
+    return fixed if fixed != ln else None
+
+
+def _fix_shell_true(ln: str) -> str | None:
+    """Set ``shell=False`` rather than deleting the argument.
+
+    Removing ``shell=True`` outright can silently change behavior (and break call
+    sites that pass a command string). Flipping the value keeps the call shape and
+    still clears the detection; the developer reviews the PR before merging.
+    """
+    fixed = re.sub(r"shell\s*=\s*True", "shell=False", ln)
+    return fixed if fixed != ln else None
+
+
+def _fix_tls_verify(ln: str) -> str | None:
+    fixed = (
+        re.sub(r"verify\s*=\s*False", "verify=True", ln)
+        .replace("rejectUnauthorized: false", "rejectUnauthorized: true")
+        .replace("rejectUnauthorized:false", "rejectUnauthorized:true")
+        .replace("InsecureSkipVerify: true", "InsecureSkipVerify: false")
+        .replace("InsecureSkipVerify:true", "InsecureSkipVerify:false")
+    )
+    return fixed if fixed != ln else None
+
+
+def _fix_flask_debug(ln: str) -> str | None:
+    fixed = re.sub(r"debug\s*=\s*True", "debug=False", ln)
+    return fixed if fixed != ln else None
+
+
 # rule_id -> function(line) -> fixed_line | None (None = no change / not applicable).
 REWRITES: dict[str, Callable[[str], str | None]] = {
-    "patterns.python-yaml-load": lambda ln: (
-        re.sub(r"yaml\.load\(", "yaml.safe_load(", ln)
-        if "yaml.load(" in ln and "Safe" not in ln else None
-    ),
-    "patterns.weak-hash-md5-sha1": lambda ln: (
-        ln.replace("md5", "sha256").replace("sha1", "sha256")
-        .replace("MD5", "SHA-256").replace("SHA-1", "SHA-256").replace("SHA1", "SHA-256")
-        if re.search(r"(?i)md5|sha-?1", ln) else None
-    ),
-    "patterns.python-shell-true": lambda ln: (
-        re.sub(r",?\s*shell\s*=\s*True", "", ln)
-        if "shell=True" in ln.replace(" ", "")
-        else re.sub(r"shell\s*=\s*True", "shell=False", ln)
-    ),
-    "patterns.tls-verify-disabled": lambda ln: (
-        ln.replace("verify=False", "verify=True")
-        .replace("verify = False", "verify = True")
-        .replace("rejectUnauthorized: false", "rejectUnauthorized: true")
-        .replace("InsecureSkipVerify: true", "InsecureSkipVerify: false")
-    ),
-    "patterns.flask-debug-true": lambda ln: re.sub(r"debug\s*=\s*True", "debug=False", ln),
+    "patterns.python-yaml-load": _fix_yaml_load,
+    "patterns.weak-hash-md5-sha1": _fix_weak_hash,
+    "patterns.python-shell-true": _fix_shell_true,
+    "patterns.tls-verify-disabled": _fix_tls_verify,
+    "patterns.flask-debug-true": _fix_flask_debug,
 }
 
 

@@ -108,11 +108,17 @@ class Project:
         return set(DEFAULT_IGNORES) | set(self.extra_ignores)
 
     def iter_files(self) -> Iterator[FileRef]:
-        """Walk the project, skipping ignored directories and unreadable files."""
+        """Walk the project, skipping ignored directories and unreadable files.
+
+        Directories and files are traversed in sorted order so that the file list
+        — and therefore finding ids and report ordering — is deterministic and
+        reproducible across machines and filesystems.
+        """
         ignores = self._ignored()
         for dirpath, dirnames, filenames in os.walk(self.root):
-            dirnames[:] = [d for d in dirnames if d not in ignores]
-            for filename in filenames:
+            # Sorting dirnames in place also fixes os.walk's traversal order.
+            dirnames[:] = sorted(d for d in dirnames if d not in ignores)
+            for filename in sorted(filenames):
                 abs_path = Path(dirpath) / filename
                 try:
                     size = abs_path.stat().st_size

@@ -22,9 +22,14 @@ issue.
 - **Understands the project first.** Detects languages and frameworks and builds
   an architecture map — APIs, auth flows, datastores, third-party services, cloud,
   containers, CI/CD, and dependency manifests — before scanning.
-- **Layered analysis.** Secret detection, dependency vulnerabilities (checked
-  against the live [OSV](https://osv.dev) database), static code analysis (SAST),
-  and infrastructure-as-code checks out of the box, extensible via plugins.
+- **Layered analysis.** Secret detection, dependency vulnerabilities — including
+  **transitive dependencies from lock files** across PyPI (`poetry.lock`,
+  `Pipfile.lock`), npm (`package-lock.json`, `yarn.lock`), Go (`go.mod`), Rust
+  (`Cargo.lock`), Ruby (`Gemfile.lock`), and PHP (`composer.lock`), checked against
+  the live [OSV](https://osv.dev) database — static code analysis (SAST), and
+  infrastructure-as-code checks out of the box, extensible via plugins.
+- **CI-native.** Deterministic, reproducible output; **baseline / diff-aware
+  scanning** so pull requests are gated only on newly introduced findings.
 - **Findings that teach.** Every finding carries reasoning, taxonomy mappings, and
   remediation — not just a line number.
 - **Attack Simulation Mode.** Instead of "this is vulnerable", Argus produces a

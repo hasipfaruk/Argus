@@ -8,14 +8,38 @@ those components knowing about each other.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from datetime import datetime, timezone
 from enum import IntEnum
-from typing import Any
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
+_E = TypeVar("_E", bound="_LabeledIntEnum")
 
-class Severity(IntEnum):
+
+class _LabeledIntEnum(IntEnum):
+    """Ordered enum with a human label and tolerant parsing.
+
+    Integer ordering allows sorting and threshold comparisons; the shared
+    ``parse``/``label`` avoids repeating the same boilerplate on every enum.
+    """
+
+    @classmethod
+    def parse(cls: type[_E], value: str | int | _E) -> _E:
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, int):
+            return cls(value)
+        return cls[str(value).strip().upper().replace(" ", "_")]
+
+    @property
+    def label(self) -> str:
+        return self.name.replace("_", " ").title()
+
+
+class Severity(_LabeledIntEnum):
     """Ordered severity levels. Integer ordering allows sorting and thresholds."""
 
     INFO = 0
@@ -23,18 +47,6 @@ class Severity(IntEnum):
     MEDIUM = 2
     HIGH = 3
     CRITICAL = 4
-
-    @classmethod
-    def parse(cls, value: str | int | Severity) -> Severity:
-        if isinstance(value, Severity):
-            return value
-        if isinstance(value, int):
-            return cls(value)
-        return cls[str(value).strip().upper()]
-
-    @property
-    def label(self) -> str:
-        return self.name.capitalize()
 
     def to_cvss_band(self) -> str:
         """Rough mapping to a CVSS v3 qualitative band, for report headers."""
@@ -47,27 +59,15 @@ class Severity(IntEnum):
         }[self]
 
 
-class Confidence(IntEnum):
+class Confidence(_LabeledIntEnum):
     """How sure Argus is that a finding is a true positive."""
 
     LOW = 0
     MEDIUM = 1
     HIGH = 2
 
-    @classmethod
-    def parse(cls, value: str | int | Confidence) -> Confidence:
-        if isinstance(value, Confidence):
-            return value
-        if isinstance(value, int):
-            return cls(value)
-        return cls[str(value).strip().upper()]
 
-    @property
-    def label(self) -> str:
-        return self.name.capitalize()
-
-
-class Likelihood(IntEnum):
+class Likelihood(_LabeledIntEnum):
     """Estimated likelihood that a weakness is exploited in practice."""
 
     RARE = 0
@@ -75,10 +75,6 @@ class Likelihood(IntEnum):
     POSSIBLE = 2
     LIKELY = 3
     ALMOST_CERTAIN = 4
-
-    @property
-    def label(self) -> str:
-        return self.name.replace("_", " ").title()
 
 
 class Location(BaseModel):
@@ -169,8 +165,19 @@ class Finding(BaseModel):
     detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def fingerprint(self) -> str:
-        """A stable identifier used to de-duplicate and track findings over time."""
-        return f"{self.rule_id}|{self.location.path}|{self.location.start_line}"
+        """A stable identifier used to de-duplicate and track findings over time.
+
+        Keyed on the *content* of the offending code (whitespace-normalized) rather
+        than the raw line number, so a finding keeps its identity when unrelated
+        edits shift it up or down the file. This is what makes baseline/diff-aware
+        scanning and cross-commit tracking reliable. Falls back to the line number
+        for file-level findings that have no snippet.
+        """
+        basis = re.sub(r"\s+", "", self.location.snippet or "")
+        if basis:
+            digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
+            return f"{self.rule_id}|{self.location.path}|{digest}"
+        return f"{self.rule_id}|{self.location.path}|L{self.location.start_line}"
 
     def risk_score(self) -> float:
         """A 0–100 score combining severity, confidence, and likelihood.

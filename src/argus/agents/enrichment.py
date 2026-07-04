@@ -23,17 +23,15 @@ class EnrichmentAgent(Agent):
     name = "enrichment"
 
     def process(self, finding: Finding, ctx: AgentContext) -> Finding:
-        # If the scanner already supplied full reasoning, leave it unless a real
-        # model can improve it with project context.
-        has_reasoning = all([finding.why_vulnerable, finding.attacker_perspective,
-                             finding.business_impact])
-
+        # With a real model configured, always rewrite the reasoning with
+        # project-specific context — it improves on the scanner's generic text.
         if self._uses_real_model(ctx):
-            if not has_reasoning or ctx.config.ai.enabled:
-                self._enrich_with_model(finding, ctx)
+            self._enrich_with_model(finding, ctx)
             return finding
 
-        # Heuristic path: fill any missing fields from CWE templates.
+        # Heuristic path: only fill fields the scanner left empty.
+        has_reasoning = all([finding.why_vulnerable, finding.attacker_perspective,
+                             finding.business_impact])
         if not has_reasoning:
             self._enrich_heuristic(finding)
         return finding
