@@ -19,6 +19,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -166,7 +167,7 @@ def scan(
             fail_on=fail_on,
         )
 
-        progress = None if quiet else (lambda msg: err_console.print(f"[dim]· {msg}[/dim]"))
+        progress = None if quiet else (lambda msg: err_console.print(f"[dim]· {escape(msg)}[/dim]"))
         engine = ScanEngine(cfg, progress=progress)
         result = engine.scan(project)
 
@@ -247,7 +248,7 @@ def fix(
         if min_severity:
             cfg.min_severity = Severity.parse(min_severity)
 
-        progress = None if quiet else (lambda msg: err_console.print(f"[dim]· {msg}[/dim]"))
+        progress = None if quiet else (lambda msg: err_console.print(f"[dim]· {escape(msg)}[/dim]"))
         result = ScanEngine(cfg, progress=progress).scan(project)
 
         options = FixOptions(
@@ -272,7 +273,7 @@ def scanners() -> None:
     table.add_column("Category")
     table.add_column("Description")
     for name, cls in sorted(registry.scanners().items()):
-        table.add_row(name, cls.category, cls.description)
+        table.add_row(name, cls.category, escape(cls.description))
     console.print(table)
 
 
@@ -284,7 +285,7 @@ def reporters() -> None:
     table.add_column("Extension")
     table.add_column("Description")
     for name, cls in sorted(registry.reporters().items()):
-        table.add_row(name, cls.extension, cls.description)
+        table.add_row(name, cls.extension, escape(cls.description))
     console.print(table)
 
 
@@ -299,7 +300,7 @@ def providers() -> None:
     for name, cls in sorted(registry.ai_providers().items()):
         loc = "remote" if cls.is_remote else "local"
         ok = "[green]yes[/green]" if cls.is_available() else "[dim]no[/dim]"
-        table.add_row(name, loc, cls.default_model or "-", ok)
+        table.add_row(name, loc, escape(cls.default_model or "-"), ok)
     console.print(table)
     console.print("[dim]Argus defaults to 'heuristic' (offline) if the requested "
                   "provider is unavailable.[/dim]")
@@ -374,7 +375,7 @@ def _print_fix_outcome(outcome, *, open_pr: bool, dry_run: bool) -> None:
         table.add_column("Rule", style="dim")
         table.add_column("Verified", justify="center")
         for f in report.fixes:
-            table.add_row(f.path, str(f.line), f.rule_id,
+            table.add_row(escape(f.path), str(f.line), escape(f.rule_id),
                           "[green]yes[/green]" if f.verified else "[yellow]no[/yellow]")
         console.print(table)
     else:
@@ -382,7 +383,7 @@ def _print_fix_outcome(outcome, *, open_pr: bool, dry_run: bool) -> None:
                       "findings.[/yellow]")
 
     for msg in outcome.messages:
-        console.print(f"[dim]· {msg}[/dim]")
+        console.print(f"[dim]· {escape(msg)}[/dim]")
 
     if outcome.pull_request:
         console.print(Panel(f"[green]Pull request opened:[/green]\n"
@@ -467,9 +468,9 @@ def _print_table(result: ScanResult) -> None:
         table.add_row(
             f"[{c}]{f.severity.label}[/{c}]",
             str(f.risk_score()),
-            f.title,
-            f.location.as_ref(),
-            f.rule_id,
+            escape(f.title),
+            escape(f.location.as_ref()),
+            escape(f.rule_id),
         )
     console.print(table)
 
