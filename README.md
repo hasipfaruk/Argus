@@ -12,7 +12,7 @@ remediation — and it can generate a patch and check that the patch closes the
 issue.
 
 > Status: early alpha. The architecture and core pipeline are in place with a
-> working CLI, four built-in scanners, a multi-provider AI layer, and five report
+> working CLI, five built-in scanners, a multi-provider AI layer, and five report
 > formats. See the [roadmap](#roadmap).
 
 ---
@@ -51,6 +51,9 @@ pip install argus-appsec
 
 # With cloud model support
 pip install "argus-appsec[anthropic,openai]"
+
+# With the AST data-flow tier (deeper Python taint analysis, via tree-sitter)
+pip install "argus-appsec[ast]"
 ```
 
 From source (for development):
@@ -185,14 +188,37 @@ Only deterministic, self-verified fixes are applied by default (e.g. unsafe
 
 ## Roadmap
 
-Implemented: project analysis, secrets/dependency/SAST/IaC scanners, multi-provider
-AI enrichment, Attack Simulation Mode, deterministic patch generation with
-self-verification, **automated fix branches and pull requests** (`argus fix`), and
+Implemented: project analysis, secrets/dependency/SAST/IaC scanners, live OSV
+vulnerability data, multi-provider AI enrichment, Attack Simulation Mode,
+deterministic patch generation with self-verification, **automated fix branches
+and pull requests** (`argus fix`), baseline / diff-aware scanning, and
 JSON/SARIF/Markdown/HTML/CSV reporting.
 
-Planned: dynamic analysis (DAST) for deployed URLs, AST-based per-language
-scanners, live advisory-database sync (OSV), the web dashboard (trends, timelines,
-collaboration), and richer compliance rule packs.
+In progress: AST-based data-flow scanning — a tree-sitter taint analyzer for
+**Python** ships today (`pip install "argus-appsec[ast]"`); more languages next.
+
+Planned: dynamic analysis (DAST) for deployed URLs, the web dashboard (trends,
+timelines, collaboration), and richer compliance rule packs.
+
+## Known limitations
+
+Argus is an early-stage tool and honest about what it does not yet do — a security
+scanner you can't trust is worse than none:
+
+- **Static analysis only.** It reads code; it does not run your app or test a live
+  URL (no DAST yet).
+- **Deepest for Python and JavaScript/TypeScript.** Other languages are detected
+  and covered by the secrets, dependency, and IaC scanners, but have limited
+  code-level (SAST) rules so far.
+- **Code scanning has blind spots.** The default regex tier catches common
+  patterns; the optional AST tier (`[ast]`, Python) follows multi-hop data flows.
+  But cross-file and cross-function flows can still be missed. Treat a clean result
+  as "no known issues found," not a proof of safety.
+- **Dependency coverage depends on OSV.** Offline, it falls back to a small bundled
+  advisory seed (PyPI/npm) and will say so.
+
+Treat Argus as a strong, fast first line of defense — not a replacement for a
+manual security review of critical code.
 
 ## Contributing
 

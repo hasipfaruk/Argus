@@ -135,10 +135,10 @@ def scan(
 
     if resolved.web is not None:
         err_console.print(Panel(
-            "Dynamic scanning of deployed URLs (DAST) is provided by the "
-            "`dynamic` scanner plugin, which is not enabled in this build.\n"
-            "Point Argus at source code (a path or git URL) for the full static "
-            "analysis pipeline.",
+            "Dynamic scanning of deployed URLs (DAST) is on the roadmap but not "
+            "available yet.\n"
+            "Point Argus at source code — a local path or a git URL — for the full "
+            "static analysis pipeline.",
             title="Web target", border_style="yellow",
         ))
         raise typer.Exit(0)

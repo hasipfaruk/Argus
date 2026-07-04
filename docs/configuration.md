@@ -69,6 +69,26 @@ transient failures, and cached on disk so repeat scans are fast. The cache lives
 under `~/.cache/argus/osv` by default; override it with the `ARGUS_CACHE_DIR`
 environment variable, or disable it with `scanner_options.dependencies.cache: false`.
 
+## Code scanning: two tiers
+
+Argus scans source code with two complementary scanners:
+
+- **`patterns`** (always on) — a fast, regex-based pass with a lightweight
+  single-hop taint check. Broad language coverage, catches the common cases.
+- **`ast-python`** (optional) — a tree-sitter data-flow analyzer for Python that
+  tracks tainted values through *multiple* variable hops, so it catches injection
+  the regex tier misses (e.g. `x = request.args.get(...)` → `y = x` →
+  `execute(y)`). Enable it with:
+
+  ```bash
+  pip install "argus-appsec[ast]"
+  ```
+
+  Without the extra, `ast-python` reports as not-applicable and Argus uses the
+  regex tier — nothing breaks. When both run, findings for the same weakness are
+  de-duplicated (the higher-confidence AST finding wins), so you never see one
+  issue reported twice.
+
 ## Common recipes
 
 **Fast secrets-and-deps check, fail the build on High+:**
@@ -106,7 +126,7 @@ Credentials for cloud providers and git hosts are read from the environment (see
 | `ANTHROPIC_API_KEY` | `anthropic` provider |
 | `OPENAI_API_KEY` | `openai` provider |
 | `OLLAMA_HOST` | `ollama` provider (default `http://localhost:11434`) |
-| `GITHUB_TOKEN` / `GITLAB_TOKEN` / `BITBUCKET_TOKEN` | cloning private remote targets |
+| `GITHUB_TOKEN` / `GITLAB_TOKEN` | opening pull requests with `argus fix --open-pr` |
 
 ## CLI flags
 
@@ -114,10 +134,12 @@ Every relevant config field has a flag, which overrides the file:
 
 ```
 argus scan TARGET
+  -c, --config PATH         path to an .argus.yml config file
   -s, --scanners a,b        run only these scanners
       --exclude a,b         skip these scanners
   -f, --format FMT          output format (repeatable): table json sarif markdown html csv
   -o, --output PATH         write reports (a directory writes one file per format)
+      --baseline PATH       report only findings not present in a saved JSON report
       --ai-provider NAME    heuristic | anthropic | openai | ollama
       --ai-model ID         model override
       --no-ai               disable AI enrichment
@@ -126,5 +148,6 @@ argus scan TARGET
       --min-severity SEV    report findings at/above this severity
       --fail-on SEV         non-zero exit if any finding is at/above this severity
   -b, --branch NAME         branch to clone for remote targets
+      --trust-remote-config load .argus.yml from a cloned remote repo (off by default)
   -q, --quiet               suppress progress output
 ```

@@ -26,6 +26,7 @@ Version comparison is intentionally lightweight — enough to evaluate the simpl
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Iterable
 from functools import lru_cache
@@ -40,6 +41,8 @@ from argus.core.models import (
     Severity,
 )
 from argus.core.plugin import Scanner, ScannerContext, scanner
+
+log = logging.getLogger("argus.scanners.dependencies")
 
 
 @lru_cache(maxsize=1)
@@ -364,11 +367,21 @@ class DependencyScanner(Scanner):
         if not online:
             return {}, "bundled"
         deps = {pkg: version for _, pkg, version in entries}
+        from argus.scanners import osv
         try:
-            from argus.scanners import osv
             return osv.query(ecosystem, deps, timeout=timeout, use_cache=use_cache), "osv"
-        except Exception:
-            # Any failure (offline, timeout, API change) -> deterministic bundled seed.
+        except osv.OSVError as exc:
+            # Offline/timeout/API problem: fall back to the bundled seed, but say so
+            # — a silent fallback in a security tool hides reduced coverage.
+            log.warning(
+                "OSV lookup for %s failed (%s); falling back to the bundled advisory "
+                "seed, which covers far fewer packages. Findings may be incomplete.",
+                ecosystem, exc,
+            )
+            return {}, "bundled"
+        except Exception as exc:  # unexpected bug: degrade, but surface it loudly
+            log.error("Unexpected error during OSV lookup for %s: %s; using the "
+                      "bundled advisory seed.", ecosystem, exc)
             return {}, "bundled"
 
     @staticmethod

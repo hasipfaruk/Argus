@@ -8,7 +8,7 @@ plugins and never touch the core. That keeps the barrier low and the core stable
 
 ```bash
 git clone https://github.com/hasipfaruk/Argus
-cd argus
+cd Argus
 python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```

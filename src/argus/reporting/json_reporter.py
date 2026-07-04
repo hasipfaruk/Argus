@@ -1,7 +1,7 @@
 """JSON and CSV reporters.
 
 JSON is the canonical machine-readable format — a faithful serialization of the
-whole ``ScanResult``, suitable for the dashboard, diffing across scans, or feeding
+whole ``ScanResult``, suitable for a dashboard, diffing across scans, or feeding
 another tool. CSV is a flat, one-row-per-finding view for spreadsheets.
 """
 

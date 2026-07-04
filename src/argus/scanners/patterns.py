@@ -1,10 +1,11 @@
 """Static analysis via language-aware source patterns.
 
-This is a lightweight, regex-based SAST pass covering the highest-value injection
-and misuse classes across many languages. It is intentionally rule-driven: each
-rule is a small dataclass, and adding coverage means appending a rule, not
-touching the scanner. A plugin can register a more precise, AST-based scanner for
-a specific language and coexist with this one.
+This is a lightweight, regex-based SAST pass. Coverage is deepest for Python and
+JavaScript/TypeScript, plus a few language-agnostic checks (weak hashing, disabled
+TLS verification, path traversal). It is intentionally rule-driven: each rule is a
+small dataclass, and adding coverage — including new languages — means appending a
+rule, not touching the scanner. A plugin can register a more precise, AST-based
+scanner for a specific language and coexist with this one.
 
 Every rule carries the reasoning fields (why / attacker view / impact) and a CWE
 and OWASP mapping so findings are actionable without an AI provider present.
@@ -58,12 +59,35 @@ RULES: list[Rule] = [
     # --- SQL injection ---
     Rule(
         id="python-sql-fstring",
-        title="Possible SQL injection via string formatting",
-        pattern=_rx(r"(?i)(execute|executemany)\s*\(\s*f?['\"].*?(select|insert|update|delete|drop)\b.*?(['\"]\s*(%|\+|\.format\()|\{[^}]*\})"),
+        title="Possible SQL injection via f-string query",
+        # An f-string that builds SELECT/INSERT/... with FROM/WHERE/... and an
+        # interpolation is almost always SQL injection — wherever it is run,
+        # including when assigned to a variable first and passed to execute() later
+        # (which line-anchored, execute()-only patterns miss).
+        pattern=_rx(r"(?i)f['\"][^\n]*?\b(select|insert|update|delete)\b[^\n]*?\b(from|where|into|set|values)\b[^\n]*?\{[^}]*\}"),
         severity=Severity.HIGH, cwe=["CWE-89"], owasp=["A03:2021-Injection"],
         languages={"Python"}, confidence=Confidence.MEDIUM,
-        why="A SQL statement is assembled with string formatting/concatenation from "
-            "variables, so input can alter the query structure.",
+        why="A SQL statement is built from an f-string that interpolates a variable, "
+            "so input can alter the query structure.",
+        attack="Pass a value like `' OR '1'='1` or a stacked query in the tainted "
+               "parameter to read or modify unintended rows.",
+        impact="Unauthorized data access or modification, potentially full database "
+               "compromise.",
+        fix="Use parameterized queries / bound parameters (e.g. cursor.execute(sql, "
+            "params)) and never interpolate user input into SQL text.",
+    ),
+    Rule(
+        id="python-sql-format",
+        title="Possible SQL injection via string formatting",
+        # execute() with %-formatting, concatenation, or .format() on a SQL string.
+        # Distinct from the f-string rule above (no `f` prefix here) so the two
+        # never both fire on the same statement.
+        pattern=_rx(r"(?i)(execute|executemany)\s*\(\s*['\"].*?\b(select|insert|update|delete|drop)\b.*?['\"]\s*(%|\+|\.format\()"),
+        severity=Severity.HIGH, cwe=["CWE-89"], owasp=["A03:2021-Injection"],
+        languages={"Python"}, confidence=Confidence.MEDIUM,
+        why="A SQL statement passed to execute() is assembled with %-formatting, "
+            "concatenation, or .format() from variables, so input can alter the "
+            "query structure.",
         attack="Pass a value like `' OR '1'='1` or a stacked query in the tainted "
                "parameter to read or modify unintended rows.",
         impact="Unauthorized data access or modification, potentially full database "
@@ -258,6 +282,25 @@ def _is_test_file(path: str) -> bool:
     return bool(_TEST_PATH.search(path))
 
 
+# --- lightweight taint tracking (path traversal) ---------------------------
+# Full data-flow analysis needs an AST (a planned milestone). This deliberately
+# narrow heuristic catches the common, high-value case the line-anchored rules
+# miss: a filesystem path taken straight from untrusted input into a file
+# operation, even when the value passes through a variable across lines. It only
+# fires when BOTH a source and a sink are present, and backs off on sanitizers —
+# so it stays low-noise rather than flagging every open() of a variable.
+_TAINT_SOURCE = re.compile(
+    r"request\.(args|form|values|json|data|files|cookies|headers|query_params|GET|POST)\b"
+    r"|\binput\s*\(|\bsys\.argv\b"
+)
+_TAINT_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)\s*=\s*(.+)$")
+_PATH_SINK = re.compile(
+    r"\b(open|os\.open|io\.open|send_file|send_from_directory|os\.remove|os\.unlink)\s*\("
+)
+# Presence of a sanitizer on the assignment or sink line clears the finding.
+_PATH_SANITIZER = re.compile(r"secure_filename|os\.path\.basename|werkzeug|safe_join")
+
+
 @scanner
 class PatternScanner(Scanner):
     name = "patterns"
@@ -266,6 +309,10 @@ class PatternScanner(Scanner):
 
     # Only source-y files; skip data/asset languages entirely.
     _SKIP_LANGS = {"JSON", "CSS", "HTML", "YAML", None}
+
+    def applies_to(self, project) -> bool:
+        # Nothing to do on a project with no scannable source (e.g. pure IaC/docs).
+        return any(f.language not in self._SKIP_LANGS for f in project.files())
 
     def scan(self, ctx: ScannerContext) -> Iterable[Finding]:
         counter = 0
@@ -287,6 +334,69 @@ class PatternScanner(Scanner):
                     counter += 1
                     yield self._finding(rule, counter, f.rel_path, lineno, line,
                                         in_test=in_test)
+            # Cross-line path-traversal heuristic (Python only).
+            if f.language == "Python":
+                yield from self._scan_path_traversal(f, in_test)
+
+    def _scan_path_traversal(self, f, in_test: bool) -> Iterable[Finding]:
+        """Flag a file path that flows from untrusted input into a file operation.
+
+        Two-pass, single-file: collect variables assigned directly from a request/
+        input source (skipping sanitized ones), then report file-operation sinks
+        that use one of those tainted variables.
+        """
+        lines = f.lines()
+        tainted: set[str] = set()
+        for line in lines:
+            m = _TAINT_ASSIGN.match(line)
+            if m and _TAINT_SOURCE.search(m.group(2)) and not _PATH_SANITIZER.search(m.group(2)):
+                tainted.add(m.group(1))
+        if not tainted:
+            return
+        for lineno, line in enumerate(lines, start=1):
+            if len(line) > 2000 or _PATH_SANITIZER.search(line):
+                continue
+            sink = _PATH_SINK.search(line)
+            if not sink:
+                continue
+            rest = line[sink.start():]
+            used = next((v for v in tainted
+                         if re.search(rf"\b{re.escape(v)}\b", rest)), None)
+            if used:
+                yield self._path_traversal_finding(f.rel_path, lineno, line, in_test)
+
+    def _path_traversal_finding(self, path: str, lineno: int, line: str,
+                                in_test: bool) -> Finding:
+        severity = Severity.LOW if in_test else Severity.MEDIUM
+        confidence = Confidence.LOW if in_test else Confidence.MEDIUM
+        tags = ["sast", "taint"] + (["test-context"] if in_test else [])
+        return Finding(
+            id=f"{self.name}:path-traversal-taint:{path}:{lineno}",
+            rule_id=f"{self.name}.path-traversal-taint",
+            scanner=self.name,
+            title="Possible path traversal from untrusted input",
+            description="A filesystem path derived from user input reaches a file "
+                        "operation without normalization.",
+            location=Location(path=path, start_line=lineno, snippet=line.strip()[:240]),
+            severity=severity, confidence=confidence, likelihood=Likelihood.POSSIBLE,
+            cwe=["CWE-22"], owasp=["A01:2021-Broken Access Control"],
+            why_vulnerable="User-controlled input is used to build a filesystem path "
+                           "without validation, so `../` sequences can escape the "
+                           "intended directory.",
+            attacker_perspective="Request a path such as `../../etc/passwd` to read or "
+                                 "write files outside the intended location.",
+            business_impact="Disclosure of sensitive files, or writing outside the "
+                            "intended area.",
+            remediation=Remediation(
+                summary="Confirm the resolved path stays within an allowed base "
+                        "directory; reject inputs containing traversal sequences.",
+                guidance="Normalize with os.path.realpath and verify the result is "
+                         "under an allowed root, or use a vetted helper such as "
+                         "werkzeug.utils.secure_filename / safe_join.",
+                references=["https://cwe.mitre.org/data/definitions/22.html"],
+            ),
+            tags=tags,
+        )
 
     def _finding(self, rule: Rule, index: int, path: str, lineno: int,
                  line: str, *, in_test: bool = False) -> Finding:

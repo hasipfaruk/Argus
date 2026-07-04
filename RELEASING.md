@@ -40,10 +40,10 @@ That's it for setup.
 
 ## Cutting a release (each time)
 
-1. **Bump the version** in `pyproject.toml` (`version = "0.1.1"`) and in
+1. **Bump the version** in `pyproject.toml` (e.g. `version = "0.5.2"`) and in
    `src/argus/__init__.py` (`__version__`). Keep them in sync. Commit and push.
 2. On GitHub: **Releases → Draft a new release**.
-3. **Choose a tag** like `v0.1.1` (create it on publish), targeting `main`.
+3. **Choose a tag** like `v0.5.2` (create it on publish), targeting `main`.
 4. Write a short changelog in the description, then **Publish release**.
 5. The **Publish to PyPI** workflow runs automatically, builds the package, and
    uploads it. Watch it under the **Actions** tab.
@@ -55,7 +55,7 @@ That's it for setup.
 
 Argus follows [Semantic Versioning](https://semver.org):
 
-- **PATCH** (`0.1.1`) — bug fixes, no behavior change.
+- **PATCH** (`0.5.2`) — bug fixes, no behavior change.
 - **MINOR** (`0.2.0`) — new features, backward compatible (new scanner, format).
 - **MAJOR** (`1.0.0`) — breaking changes to the CLI or plugin API.
 

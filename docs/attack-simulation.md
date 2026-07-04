@@ -19,7 +19,7 @@ For every finding at Medium severity or above, Argus generates an
 6. **Before / after** — a concise comparison of the vulnerable and fixed states.
 
 These appear in the Markdown and HTML reports (in a collapsible section) and in
-the JSON/SARIF output under each finding's `exploit` field.
+the JSON output under each finding's `exploit` field.
 
 ## Safety
 
@@ -31,8 +31,8 @@ The simulation is **descriptive, not executed**:
   non-weaponized walkthrough rather than a copy-paste exploit.
 
 Each scenario is marked `sandbox_ok: true` to record that it was produced in this
-isolated, non-executing context. The footer of every report repeats that no live
-target was contacted.
+isolated, non-executing context, and each simulation notes that no live target
+was contacted.
 
 ## With and without a model
 

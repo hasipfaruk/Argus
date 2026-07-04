@@ -182,8 +182,8 @@ class Finding(BaseModel):
     def risk_score(self) -> float:
         """A 0–100 score combining severity, confidence, and likelihood.
 
-        Used for ranking and for the dashboard's aggregate risk number. The
-        weighting favors severity while letting confidence and likelihood modulate.
+        Used for ranking and for the aggregate risk number. The weighting favors
+        severity while letting confidence and likelihood modulate.
         """
         sev = self.severity / Severity.CRITICAL          # 0..1
         conf = (self.confidence + 1) / len(Confidence)   # 0.33..1

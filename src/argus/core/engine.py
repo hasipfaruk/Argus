@@ -78,8 +78,10 @@ class ScanEngine:
             except Exception as exc:  # a broken scanner must not sink the scan
                 result.errors.append(f"scanner '{scanner.name}' failed: {exc}")
 
-        # 3. Filter, then enrich. Filtering first means agents (and any paid model
-        # calls they make) only run on findings we will actually report.
+        # 3. De-duplicate across scanners, filter, then enrich. Filtering first
+        # means agents (and any paid model calls they make) only run on findings we
+        # will actually report.
+        result.findings = self._dedupe(result.findings)
         result.findings = self._filter(result.findings)
         if self.config.ai.enabled:
             self._run_agents(result, project, ai)
@@ -137,6 +139,43 @@ class ScanEngine:
 
     def _filter(self, findings: list[Finding]) -> list[Finding]:
         return [f for f in findings if f.severity >= self.config.min_severity]
+
+    # Two different tiers reporting the same weakness within this many lines are
+    # treated as one (e.g. the regex tier flags an unsafe query where it is built,
+    # the AST tier flags it where it is executed a line later).
+    _DEDUPE_WINDOW = 3
+
+    @classmethod
+    def _dedupe(cls, findings: list[Finding]) -> list[Finding]:
+        """Collapse the same weakness reported by more than one scanner.
+
+        When the regex ``patterns`` tier and the AST ``ast-python`` tier both catch
+        one injection — often a line or two apart (construction vs. execution) —
+        keep the higher-confidence (then higher-severity) finding so the report is
+        not doubled. Only merges findings from *different* scanners with the same
+        CWE in the same file within a small line window, so distinct issues and
+        within-tier findings are preserved. Findings with no line or CWE pass through.
+        """
+        passthrough = [f for f in findings
+                       if f.location.start_line is None or not f.cwe]
+        mergeable = [f for f in findings
+                     if f.location.start_line is not None and f.cwe]
+        mergeable.sort(key=lambda f: (f.location.path, tuple(sorted(f.cwe)),
+                                      f.location.start_line or 0))
+        kept: list[Finding] = []
+        for f in mergeable:
+            prev = kept[-1] if kept else None
+            if (prev is not None
+                    and prev.scanner != f.scanner
+                    and prev.location.path == f.location.path
+                    and sorted(prev.cwe) == sorted(f.cwe)
+                    and (f.location.start_line or 0)
+                        - (prev.location.start_line or 0) <= cls._DEDUPE_WINDOW):
+                if (f.confidence, f.severity) > (prev.confidence, prev.severity):
+                    kept[-1] = f
+                continue
+            kept.append(f)
+        return passthrough + kept
 
     # --- CI gating helper ---------------------------------------------------
     def should_fail(self, result: ScanResult) -> bool:

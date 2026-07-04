@@ -39,7 +39,8 @@ def test_secrets_clean_project_no_findings(clean_project):
 def test_patterns_finds_injection_classes(vulnerable_project):
     findings = _run("patterns", vulnerable_project)
     rules = {f.rule_id for f in findings}
-    assert "patterns.python-sql-fstring" in rules
+    # SQL injection is detected via either the f-string or the format rule.
+    assert rules & {"patterns.python-sql-fstring", "patterns.python-sql-format"}
     assert "patterns.python-shell-true" in rules
     assert "patterns.python-yaml-load" in rules
     assert "patterns.weak-hash-md5-sha1" in rules
@@ -47,9 +48,67 @@ def test_patterns_finds_injection_classes(vulnerable_project):
 
 def test_patterns_carry_cwe_and_reasoning(vulnerable_project):
     findings = _run("patterns", vulnerable_project)
-    sqli = next(f for f in findings if f.rule_id == "patterns.python-sql-fstring")
+    sqli = next(f for f in findings if "CWE-89" in f.cwe)
     assert sqli.cwe == ["CWE-89"]
     assert sqli.why_vulnerable and sqli.attacker_perspective and sqli.business_impact
+
+
+def test_sql_injection_caught_when_query_assigned_then_executed(tmp_path):
+    """Regression: an f-string SQL query built into a variable, executed later.
+
+    This is the cross-line case line-anchored, execute()-only patterns miss.
+    """
+    findings = _run_patterns(
+        tmp_path, "app.py",
+        'def q(username):\n'
+        '    query = f"SELECT * FROM users WHERE name = \'{username}\'"\n'
+        '    cursor.execute(query)\n',
+    )
+    sqli = [f for f in findings if "CWE-89" in f.cwe]
+    assert len(sqli) == 1  # detected exactly once, no double report
+    assert sqli[0].rule_id == "patterns.python-sql-fstring"
+
+
+def test_inline_execute_fstring_not_double_reported(tmp_path):
+    findings = _run_patterns(
+        tmp_path, "app.py",
+        'cursor.execute(f"SELECT * FROM t WHERE id = \'{x}\'")\n',
+    )
+    assert len([f for f in findings if "CWE-89" in f.cwe]) == 1
+
+
+# --- path traversal via lightweight taint tracking (cross-line) -------------
+def test_path_traversal_tainted_var_across_lines(tmp_path):
+    """The case line-anchored rules miss: request input -> variable -> open()."""
+    findings = _run_patterns(
+        tmp_path, "app.py",
+        'def read():\n'
+        '    filename = request.args.get("file")\n'
+        '    with open(filename, "r") as f:\n'
+        '        return f.read()\n',
+    )
+    pt = [f for f in findings if "CWE-22" in f.cwe]
+    assert len(pt) == 1
+    assert pt[0].rule_id == "patterns.path-traversal-taint"
+
+
+def test_path_traversal_not_flagged_when_source_is_constant(tmp_path):
+    findings = _run_patterns(
+        tmp_path, "app.py",
+        'filename = "config.yml"\n'
+        'open(filename)\n',
+    )
+    assert not [f for f in findings if "CWE-22" in f.cwe]
+
+
+def test_path_traversal_not_flagged_when_sanitized(tmp_path):
+    findings = _run_patterns(
+        tmp_path, "app.py",
+        'from werkzeug.utils import secure_filename\n'
+        'filename = secure_filename(request.args.get("file"))\n'
+        'open(filename)\n',
+    )
+    assert not [f for f in findings if "CWE-22" in f.cwe]
 
 
 def test_dependencies_flags_known_cve(vulnerable_project):

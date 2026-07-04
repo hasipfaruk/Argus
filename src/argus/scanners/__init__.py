@@ -5,6 +5,6 @@ Each scanner is small and self-contained; they are the reference implementations
 that the plugin guide points contributors at.
 """
 
-from argus.scanners import dependencies, iac, patterns, secrets  # noqa: F401
+from argus.scanners import ast_python, dependencies, iac, patterns, secrets  # noqa: F401
 
-__all__ = ["dependencies", "iac", "patterns", "secrets"]
+__all__ = ["ast_python", "dependencies", "iac", "patterns", "secrets"]
