@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "argus-appsec"
-version = "0.5.0"
+version = "0.5.1"
 description = "An open-source AI Security Engineer: maps your application, finds vulnerabilities, explains them, and proposes verified fixes."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Argus contributors" }]
+authors = [{ name = "Haseeb Farooq", email = "haseebfarooq35@gmail.com" }]
 keywords = [
   "security",
   "appsec",

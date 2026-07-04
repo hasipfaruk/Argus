@@ -14,7 +14,7 @@ from argus.core.models import (
 )
 from argus.core.project import Project
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 __all__ = [
     "Confidence",

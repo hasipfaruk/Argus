@@ -48,6 +48,27 @@ console = Console()
 err_console = Console(stderr=True)
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(f"Argus v{__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False, "--version", "-V", help="Show the Argus version and exit.",
+        callback=_version_callback, is_eager=True,
+    ),
+) -> None:
+    """Argus — an open-source AI Security Engineer.
+
+    Point Argus at a codebase and it finds vulnerabilities, explains them, and can
+    fix them. Run `argus COMMAND --help` for details on any command, e.g.
+    `argus scan --help`.
+    """
+
+
 @app.command()
 def scan(
     target: str = typer.Argument(
