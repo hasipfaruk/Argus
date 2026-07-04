@@ -14,13 +14,16 @@ register_builtins()
 
 
 @pytest.fixture(autouse=True)
-def _offline_osv(monkeypatch):
+def _offline_osv(request, monkeypatch):
     """Keep the whole suite offline and deterministic.
 
     The dependency scanner queries OSV over the network by default. In tests we
     force that to fail so it falls back to the bundled advisory seed. Tests that
-    specifically exercise OSV override this with their own monkeypatch.
+    exercise the OSV client directly opt out with @pytest.mark.osv_network (and
+    inject a mock transport), so they still never touch the real network.
     """
+    if request.node.get_closest_marker("osv_network"):
+        return
     from argus.scanners import osv
 
     def _raise(*args, **kwargs):

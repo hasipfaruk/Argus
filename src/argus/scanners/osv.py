@@ -2,32 +2,59 @@
 
 The bundled advisory file is a small offline seed. This module queries the public
 `OSV database <https://osv.dev>`_ for the project's actual dependencies, which
-covers thousands of advisories across PyPI, npm, and more.
+covers thousands of advisories across many ecosystems.
 
-Privacy note: only package **names and versions** are sent to OSV — never source
-code. This keeps Argus's offline-first promise intact (source stays local) while
-still giving accurate results when a network is available. When OSV is
-unreachable, the dependency scanner falls back to the bundled seed.
+Design goals (this is security-critical plumbing, so correctness beats cleverness):
 
-Efficiency: one batched query returns the vulnerability IDs affecting each
-package/version, then each unique vulnerability's full record is fetched once,
-concurrently across a small thread pool.
+* **No silent gaps.** Every declared package is queried — requests are *batched*
+  in chunks rather than truncated. A hard ceiling exists only as a runaway guard,
+  and exceeding it is logged, never silent. A dropped dependency in a security
+  scan reads as "you're covered" when you are not.
+* **Resilient.** Transient failures (timeouts, 429, 5xx) are retried with
+  exponential backoff before the caller falls back to the offline seed.
+* **Fast on repeat scans.** Fetched advisory records are cached on disk (keyed by
+  a hash of the vulnerability id, with a TTL), so re-scanning a large lock file
+  does not re-hit the network and stays polite to the public API.
+* **Private.** Only package **names and versions** are sent to OSV — never source.
+
+When OSV is unreachable, :func:`query` raises :class:`OSVError` so the dependency
+scanner can fall back to the bundled seed.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
 from argus.core.models import Severity
 
+log = logging.getLogger("argus.scanners.osv")
+
 OSV_API = "https://api.osv.dev"
 
-# Cap concurrent OSV record fetches so a large transitive tree stays polite to the
-# public API while still being much faster than one-at-a-time requests.
+# OSV's querybatch accepts up to 1000 queries per request; chunk to stay within it.
+_BATCH_SIZE = 1000
+# Runaway guard only. Below this, every package is scanned; above it we log and cap
+# rather than silently sending an unbounded request.
+_MAX_PACKAGES = 5000
+# Cap concurrent record fetches so a large transitive tree stays polite to the API.
 _MAX_FETCH_WORKERS = 8
+# Retry policy for transient failures.
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 0.5  # seconds; doubles each retry
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# Cached advisory records are considered fresh for this long.
+_CACHE_TTL = 24 * 3600
+# Indirection so tests can stub out backoff sleeps.
+_SLEEP = time.sleep
 
 # OSV/GHSA qualitative severity -> Argus severity.
 _SEVERITY_WORD = {
@@ -54,49 +81,143 @@ class OSVError(RuntimeError):
     pass
 
 
+# --- on-disk cache ---------------------------------------------------------
+def _cache_dir() -> Path:
+    override = os.environ.get("ARGUS_CACHE_DIR")
+    base = Path(override) if override else Path.home() / ".cache" / "argus"
+    return base / "osv"
+
+
+def _cache_file(cache_dir: Path, vuln_id: str) -> Path:
+    # Hash the id for the filename: stable, and immune to path traversal from a
+    # crafted advisory id (which is untrusted data from the API).
+    digest = hashlib.sha256(vuln_id.encode("utf-8")).hexdigest()
+    return cache_dir / f"{digest}.json"
+
+
+def _cache_get(vuln_id: str, cache_dir: Path) -> dict | None:
+    try:
+        blob = json.loads(_cache_file(cache_dir, vuln_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(blob, dict) or time.time() - float(blob.get("fetched", 0)) > _CACHE_TTL:
+        return None
+    vuln = blob.get("vuln")
+    return vuln if isinstance(vuln, dict) else None
+
+
+def _cache_put(vuln_id: str, vuln: dict, cache_dir: Path) -> None:
+    try:  # cache is best-effort; a write failure must never fail a scan
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        _cache_file(cache_dir, vuln_id).write_text(
+            json.dumps({"fetched": time.time(), "vuln": vuln}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+# --- HTTP with retry -------------------------------------------------------
+def _request_with_retry(client: httpx.Client, method: str, url: str,
+                        **kwargs: object) -> httpx.Response:
+    """Issue a request, retrying transient failures with exponential backoff.
+
+    Returns the last response on a retryable status after exhausting attempts (so
+    the caller decides how to treat it); raises the underlying error only if no
+    response was ever received.
+    """
+    delay = _BACKOFF_BASE
+    last_exc: httpx.HTTPError | None = None
+    last_resp: httpx.Response | None = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = client.request(method, url, **kwargs)  # type: ignore[arg-type]
+        except httpx.HTTPError as exc:
+            last_exc = exc
+        else:
+            last_resp = resp
+            if resp.status_code not in _RETRYABLE_STATUS:
+                return resp
+        if attempt < _MAX_RETRIES - 1:
+            _SLEEP(delay)
+            delay *= 2
+    if last_resp is not None:
+        return last_resp
+    raise last_exc or OSVError(f"OSV request to {url} failed")
+
+
+# --- public API ------------------------------------------------------------
 def query(ecosystem: str, deps: dict[str, str], *, timeout: float = 15.0,
-          max_packages: int = 400) -> dict[tuple[str, str], list[OSVAdvisory]]:
+          use_cache: bool = True,
+          client: httpx.Client | None = None) -> dict[tuple[str, str], list[OSVAdvisory]]:
     """Return advisories per (package, version) for the given ecosystem.
 
     Raises OSVError on any network/HTTP problem so the caller can fall back to the
     offline seed. Never raises for "no vulnerabilities" — that is an empty result.
     """
-    items = list(deps.items())[:max_packages]
+    items = list(deps.items())
     if not items:
         return {}
+    if len(items) > _MAX_PACKAGES:
+        log.warning(
+            "OSV: %d packages exceed the %d-package ceiling; scanning the first %d. "
+            "Findings for the rest are NOT included in this run.",
+            len(items), _MAX_PACKAGES, _MAX_PACKAGES,
+        )
+        items = items[:_MAX_PACKAGES]
 
-    queries = [{"package": {"name": name, "ecosystem": ecosystem}, "version": version}
-               for name, version in items]
+    own_client = client is None
+    client = client or httpx.Client(timeout=timeout)
+    per_pkg_ids: list[list[str]] = []
+    id_set: set[str] = set()
+    records: dict[str, OSVAdvisory] = {}
+    skipped = 0
     try:
-        with httpx.Client(timeout=timeout) as client:
-            batch = client.post(f"{OSV_API}/v1/querybatch", json={"queries": queries})
-            batch.raise_for_status()
-            results = batch.json().get("results", [])
-
-            # Collect unique vuln IDs across all packages.
-            id_set: set[str] = set()
-            per_pkg_ids: list[list[str]] = []
-            for res in results:
+        # 1) Batched lookups across all packages (no silent truncation).
+        for start in range(0, len(items), _BATCH_SIZE):
+            chunk = items[start:start + _BATCH_SIZE]
+            queries = [{"package": {"name": n, "ecosystem": ecosystem}, "version": v}
+                       for n, v in chunk]
+            resp = _request_with_retry(
+                client, "POST", f"{OSV_API}/v1/querybatch", json={"queries": queries})
+            resp.raise_for_status()
+            for res in resp.json().get("results", []):
                 ids = [v["id"] for v in (res.get("vulns") or [])]
                 per_pkg_ids.append(ids)
                 id_set.update(ids)
 
-            # Fetch each unique vuln record once, concurrently. Results are keyed
-            # by id and reassembled in dependency order below, so output stays
-            # deterministic regardless of completion order.
-            def _fetch(vid: str) -> tuple[str, OSVAdvisory | None]:
-                r = client.get(f"{OSV_API}/v1/vulns/{vid}")
-                return vid, (_parse_vuln(r.json()) if r.status_code == 200 else None)
+        # 2) Fetch each unique vuln once, cache-first, concurrently. Reassembled by
+        # id below so output is deterministic regardless of completion order.
+        cache_dir = _cache_dir()
 
-            records: dict[str, OSVAdvisory] = {}
-            if id_set:
-                workers = min(_MAX_FETCH_WORKERS, len(id_set))
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    for vid, adv in pool.map(_fetch, sorted(id_set)):
-                        if adv is not None:
-                            records[vid] = adv
+        def _fetch(vid: str) -> tuple[str, OSVAdvisory | None]:
+            if use_cache:
+                cached = _cache_get(vid, cache_dir)
+                if cached is not None:
+                    return vid, _parse_vuln(cached)
+            r = _request_with_retry(client, "GET", f"{OSV_API}/v1/vulns/{vid}")
+            if r.status_code != 200:
+                return vid, None
+            data = r.json()
+            if use_cache:
+                _cache_put(vid, data, cache_dir)
+            return vid, _parse_vuln(data)
+
+        if id_set:
+            workers = min(_MAX_FETCH_WORKERS, len(id_set))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for vid, adv in pool.map(_fetch, sorted(id_set)):
+                    if adv is None:
+                        skipped += 1
+                    else:
+                        records[vid] = adv
     except (httpx.HTTPError, ValueError, KeyError) as exc:
         raise OSVError(f"OSV lookup failed: {exc}") from exc
+    finally:
+        if own_client:
+            client.close()
+
+    if skipped:
+        log.warning("OSV: %d advisory record(s) could not be fetched after %d "
+                    "attempts and were omitted from this scan.", skipped, _MAX_RETRIES)
 
     out: dict[tuple[str, str], list[OSVAdvisory]] = {}
     for (name, version), ids in zip(items, per_pkg_ids, strict=False):

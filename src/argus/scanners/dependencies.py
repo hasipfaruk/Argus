@@ -331,6 +331,7 @@ class DependencyScanner(Scanner):
         opts = ctx.config.options_for(self.name)
         online = bool(opts.get("online", True))
         timeout = float(opts.get("timeout", 15.0))
+        use_cache = bool(opts.get("cache", True))
         counter = 0
 
         # Collect declared dependencies per ecosystem, de-duplicating by
@@ -346,7 +347,8 @@ class DependencyScanner(Scanner):
 
         for ecosystem, bucket in per_eco.items():
             entries = list(bucket.values())
-            osv_map, source = self._resolve_source(ecosystem, entries, online, timeout)
+            osv_map, source = self._resolve_source(
+                ecosystem, entries, online, timeout, use_cache)
             for path, pkg, version in entries:
                 if source == "osv":
                     advisories = [_osv_to_dict(a, ecosystem)
@@ -357,14 +359,14 @@ class DependencyScanner(Scanner):
                     counter += 1
                     yield self._finding(adv, counter, path, pkg, version)
 
-    def _resolve_source(self, ecosystem, entries, online, timeout):
+    def _resolve_source(self, ecosystem, entries, online, timeout, use_cache=True):
         """Return (osv_map, source). Prefer live OSV; fall back to the bundled seed."""
         if not online:
             return {}, "bundled"
         deps = {pkg: version for _, pkg, version in entries}
         try:
             from argus.scanners import osv
-            return osv.query(ecosystem, deps, timeout=timeout), "osv"
+            return osv.query(ecosystem, deps, timeout=timeout, use_cache=use_cache), "osv"
         except Exception:
             # Any failure (offline, timeout, API change) -> deterministic bundled seed.
             return {}, "bundled"

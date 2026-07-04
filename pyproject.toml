@@ -72,6 +72,9 @@ packages = ["src/argus"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+  "osv_network: exercises the OSV client with a mocked transport (never the real network)",
+]
 
 [tool.ruff]
 line-length = 100

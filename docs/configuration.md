@@ -51,6 +51,7 @@ scanner_options:
   dependencies:
     online: true              # query the OSV database for real, current CVEs
     timeout: 15               # seconds for OSV lookups
+    cache: true               # cache OSV records on disk to speed repeat scans
 ```
 
 ## Dependency scanning and OSV
@@ -62,6 +63,11 @@ source code — so this preserves Argus's offline-first stance. Set
 `scanner_options.dependencies.online: false` to use only the small bundled seed
 (fully offline); Argus also falls back to the seed automatically if OSV is
 unreachable.
+
+Lookups are batched (no dependency is silently dropped), retried with backoff on
+transient failures, and cached on disk so repeat scans are fast. The cache lives
+under `~/.cache/argus/osv` by default; override it with the `ARGUS_CACHE_DIR`
+environment variable, or disable it with `scanner_options.dependencies.cache: false`.
 
 ## Common recipes
 
