@@ -201,6 +201,26 @@ def test_pickle_roundtrip_suppressed(tmp_path):
     assert not [f for f in findings if f.rule_id == "patterns.python-pickle-loads"]
 
 
+def test_eval_exec_flags_builtins_not_method_calls(tmp_path):
+    # The bare builtins are still flagged.
+    for code in ("r = eval(user_input)\n", "exec(compile(src, 'x', 'exec'))\n"):
+        findings = _run_patterns(tmp_path, "a.py", code)
+        assert [f for f in findings if f.rule_id == "patterns.python-eval-exec"], code
+
+    # Method calls named exec/eval are NOT the builtins and must not be flagged:
+    # SQLModel's session.exec() and a DB cursor.exec() are safe APIs.
+    safe = (
+        "rows = session.exec(select(Project).where(Project.id == pid)).all()\n"
+        "cur.exec('noop')\n"
+        "self.eval(model_output)\n"
+    )
+    findings = _run_patterns(tmp_path, "store.py", safe)
+    # (_run_patterns scans the whole tmp dir, so scope the check to store.py.)
+    assert not [f for f in findings
+                if f.rule_id == "patterns.python-eval-exec"
+                and f.location.path == "store.py"]
+
+
 def test_test_file_findings_are_downgraded(tmp_path):
     from argus.core.models import Confidence, Severity
 

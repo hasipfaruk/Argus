@@ -19,6 +19,10 @@ exclude_paths:
   - "src/argus/scanners/patterns.py"
   - "src/argus/scanners/secrets.py"
   - "src/argus/remediation/rewrites.py"
+  # The AST scanners carry deliberately-vulnerable SQL/eval examples in their
+  # module docstrings to illustrate what the taint analysis detects.
+  - "src/argus/scanners/ast_python.py"
+  - "src/argus/scanners/ast_python_interproc.py"
   # Reviewed-safe: a list-form, protocol-restricted, env-hardened git clone.
   # The URL is validated before this call; the taint tier cannot see that
   # across the function. (An inline-suppression mechanism is on the roadmap.)

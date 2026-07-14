@@ -218,7 +218,10 @@ RULES: list[Rule] = [
     Rule(
         id="python-eval-exec",
         title="Use of eval/exec on dynamic input",
-        pattern=_rx(r"\b(eval|exec)\s*\(\s*(?!['\"]\s*\))"),
+        # Match only the bare builtins eval()/exec(), never a method call like
+        # ``session.exec(...)`` (SQLModel) or ``cursor.exec(...)`` — the lookbehind
+        # rejects a preceding ``.`` or word char so those safe APIs are not flagged.
+        pattern=_rx(r"(?<![\w.])(eval|exec)\s*\(\s*(?!['\"]\s*\))"),
         severity=Severity.HIGH, cwe=["CWE-95"], owasp=["A03:2021-Injection"],
         languages={"Python"}, confidence=Confidence.LOW,
         why="eval/exec execute their argument as code; if any part comes from input, "
