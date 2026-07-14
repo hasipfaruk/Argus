@@ -5,7 +5,55 @@ and can fail a build on a severity threshold.
 
 ## GitHub Actions
 
-A ready-to-copy workflow lives at
+### The official Action (recommended)
+
+The fastest path is the official Action, one block of YAML:
+
+```yaml
+name: Security
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write   # required for the SARIF upload
+
+jobs:
+  argus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # full history enables diff-aware PR scanning
+      - uses: hasipfaruk/Argus@v0.7.0
+        with:
+          fail-on: high      # block merges on newly introduced High+ findings
+```
+
+That is the whole setup. Findings appear as PR annotations and in the Security
+tab. On pull requests the Action is **diff-aware by default**: it scans the base
+branch to build a baseline and gates only on findings the PR *introduces*, the
+property that keeps a first adoption from drowning in pre-existing alerts.
+
+All inputs are optional; the useful ones:
+
+| Input | Default | Purpose |
+|-------|---------|---------|
+| `path` | `.` | Directory to scan |
+| `fail-on` | *(never fail)* | Severity gate: `critical`/`high`/`medium`/`low` |
+| `scanners` / `exclude-scanners` | all | Choose scanners |
+| `min-severity` |, | Report floor |
+| `config` |, | Path to an `.argus.yml` |
+| `diff-aware` | `true` | Baseline PRs against the base branch |
+| `upload-sarif` | `true` | Upload to Code Scanning |
+| `argus-version` | latest | Pin the argus-appsec version |
+| `extra-args` |, | Anything else `argus scan` accepts |
+
+### Hand-rolled workflow
+
+If you need more control, a ready-to-copy workflow lives at
 [`.github/workflows/argus-scan.yml`](../.github/workflows/argus-scan.yml). It runs
 Argus, writes SARIF, and uploads it to GitHub Code Scanning so findings appear as
 PR annotations and in the Security tab.
@@ -43,7 +91,7 @@ automatically on pull requests.
 ## Reproducibility
 
 Argus walks files in a deterministic, sorted order, so finding IDs and report
-ordering are stable across machines and runs — safe to diff report-to-report.
+ordering are stable across machines and runs, safe to diff report-to-report.
 
 ## Untrusted targets
 
@@ -65,21 +113,52 @@ argus:
       - gl-argus.sarif
 ```
 
+## Bitbucket Pipelines
+
+```yaml
+# bitbucket-pipelines.yml
+pipelines:
+  default:
+    - step:
+        name: Argus security scan
+        image: python:3.12-slim
+        script:
+          - pip install argus-appsec
+          - argus scan . -f sarif -o argus.sarif --fail-on high --no-ai --quiet
+        artifacts:
+          - argus.sarif
+```
+
+## Docker
+
+An official image is published to GHCR on every release, useful where `pip`
+is unavailable in CI or you want a pinned, reproducible scanner:
+
+```bash
+docker run --rm -v "$PWD:/work" ghcr.io/hasipfaruk/argus scan /work --fail-on high
+```
+
+The image runs as a non-root user and includes git, so remote repository
+targets (`argus scan https://github.com/org/repo`) work too.
+
 ## Pre-commit hook
 
-Catch secrets and obvious issues before they are committed:
+Argus ships hooks for the [pre-commit](https://pre-commit.com) framework, so
+catching a secret **before it enters git history** takes three lines:
 
 ```yaml
 # .pre-commit-config.yaml
 repos:
-  - repo: local
+  - repo: https://github.com/hasipfaruk/Argus
+    rev: v0.7.0
     hooks:
-      - id: argus
-        name: argus (secrets + patterns)
-        entry: argus scan . -s secrets,patterns --fail-on high --quiet
-        language: system
-        pass_filenames: false
+      - id: argus-secrets        # fast, secrets-only, made for every commit
+      # - id: argus              # full static scan, heavier; consider pre-push
 ```
+
+`argus-secrets` runs only the secrets scanner with AI enrichment disabled, so
+it stays fast enough for every commit. The full `argus` hook is better suited
+to `stages: [pre-push]` or CI.
 
 ## Exit codes
 

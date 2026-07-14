@@ -6,7 +6,7 @@ function operates on the real line, so whitespace is kept automatically). These
 are the fixes Argus can apply and verify locally without a model:
 
 * ``fix_line`` applies the rewrite for a rule to a line.
-* ``verify_line_fixed`` confirms the rewrite actually removes the detection — a
+* ``verify_line_fixed`` confirms the rewrite actually removes the detection, a
   fast, local proxy for "the fix resolves the issue".
 
 Both the :class:`~argus.agents.patch.PatchAgent` (which proposes patches) and the
@@ -74,6 +74,23 @@ def _fix_flask_debug(ln: str) -> str | None:
     return fixed if fixed != ln else None
 
 
+def _fix_trust_remote_code(ln: str) -> str | None:
+    fixed = re.sub(r"trust_remote_code\s*=\s*True", "trust_remote_code=False", ln)
+    return fixed if fixed != ln else None
+
+
+def _fix_torch_load(ln: str) -> str | None:
+    """Add ``weights_only=True`` to a ``torch.load(...)`` call that lacks it.
+
+    Injects the keyword before the first closing paren of the call, which covers
+    the common single-line form. Skips lines that already pass weights_only.
+    """
+    if "torch.load(" not in ln or "weights_only" in ln:
+        return None
+    fixed = re.sub(r"(torch\.load\([^)]*?)\s*\)", r"\1, weights_only=True)", ln, count=1)
+    return fixed if fixed != ln else None
+
+
 # rule_id -> function(line) -> fixed_line | None (None = no change / not applicable).
 REWRITES: dict[str, Callable[[str], str | None]] = {
     "patterns.python-yaml-load": _fix_yaml_load,
@@ -81,6 +98,8 @@ REWRITES: dict[str, Callable[[str], str | None]] = {
     "patterns.python-shell-true": _fix_shell_true,
     "patterns.tls-verify-disabled": _fix_tls_verify,
     "patterns.flask-debug-true": _fix_flask_debug,
+    "llm.trust-remote-code": _fix_trust_remote_code,
+    "llm.torch-load-pickle": _fix_torch_load,
 }
 
 
@@ -100,16 +119,22 @@ def fix_line(rule_id: str, line: str) -> str | None:
 
 
 def detection_pattern(rule_id: str) -> re.Pattern[str] | None:
-    """The pattern-scanner regex that produced this rule, for self-verification.
+    """The scanner regex that produced this rule, for self-verification.
 
-    Loaded lazily to avoid an import cycle with the scanners package.
+    Searches both the ``patterns`` and ``llm`` rule sets (loaded lazily to avoid
+    an import cycle with the scanners package), so a rewrite for either scanner
+    can be verified by confirming the detection no longer fires.
     """
-    from argus.scanners.patterns import RULES
-
     short = rule_id.split(".", 1)[-1]
-    for rule in RULES:
-        if rule.id == short:
-            return rule.pattern
+    from argus.scanners.llm import RULES as LLM_RULES
+    from argus.scanners.patterns import RULES as PATTERN_RULES
+
+    for pattern_rule in PATTERN_RULES:
+        if pattern_rule.id == short:
+            return pattern_rule.pattern
+    for llm_rule in LLM_RULES:
+        if llm_rule.id == short:
+            return llm_rule.pattern
     return None
 
 

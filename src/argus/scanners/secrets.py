@@ -2,10 +2,10 @@
 
 Finds committed credentials two ways:
 
-1. **Signatures** — high-precision regexes for well-known token formats (AWS keys,
+1. **Signatures**, high-precision regexes for well-known token formats (AWS keys,
    GitHub tokens, private keys, Slack tokens, ...). These are reported with high
    confidence because the format itself is distinctive.
-2. **High-entropy strings** — generic assignments (``api_key = "..."``) whose
+2. **High-entropy strings**, generic assignments (``api_key = "..."``) whose
    value looks random. Reported with lower confidence and filtered heavily to
    keep noise down.
 """
@@ -78,16 +78,25 @@ def _shannon_entropy(s: str) -> float:
 class SecretsScanner(Scanner):
     name = "secrets"
     category = "secrets"
+    file_local = True
     description = "Detects committed credentials via signatures and entropy analysis."
 
     # Only scan plausible text/source/config files.
     _SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip", ".gz",
                       ".jar", ".class", ".woff", ".woff2", ".ttf", ".ico", ".lock"}
 
+    def cacheable(self, ctx: ScannerContext) -> bool:
+        # Live verification makes network calls whose result depends on the
+        # credential's current state, not the file content, so a run that
+        # verifies must not be served from (or written to) the per-file cache.
+        verify = bool(ctx.config.options_for(self.name).get("verify"))
+        return self.file_local and not verify
+
     def scan(self, ctx: ScannerContext) -> Iterable[Finding]:
         opts = ctx.config.options_for(self.name)
         entropy_threshold = float(opts.get("entropy_threshold", 4.0))
         entropy_enabled = bool(opts.get("entropy", True))
+        verify = bool(opts.get("verify", False))
         counter = 0
 
         for f in ctx.project.files():
@@ -104,13 +113,16 @@ class SecretsScanner(Scanner):
                     if not m:
                         continue
                     counter += 1
-                    yield self._make_finding(
+                    finding = self._make_finding(
                         rule_id=rule, index=counter, path=f.rel_path, lineno=lineno,
                         line=line, matched=m.group(0),
                         severity=Severity.LOW if is_example else Severity.CRITICAL,
                         confidence=Confidence.LOW if is_example else Confidence.HIGH,
                         title=f"Hardcoded credential: {rule.replace('-', ' ')}",
                     )
+                    if verify:
+                        self._apply_verification(finding, rule, m.group(0))
+                    yield finding
 
                 if not entropy_enabled:
                     continue
@@ -153,7 +165,7 @@ class SecretsScanner(Scanner):
             remediation=Remediation(
                 summary="Remove the secret from source and rotate it.",
                 guidance=(
-                    "1. Revoke/rotate the exposed credential now — assume it is "
+                    "1. Revoke/rotate the exposed credential now, assume it is "
                     "compromised.\n2. Move the value to a secret manager or an "
                     "environment variable loaded at runtime.\n3. Purge it from git "
                     "history (e.g. git-filter-repo) so it is not recoverable.\n"
@@ -168,11 +180,39 @@ class SecretsScanner(Scanner):
         )
 
     @staticmethod
+    def _apply_verification(finding: Finding, rule_id: str, secret: str) -> None:
+        """Live-check a detected secret and reflect the result on the finding.
+
+        A confirmed-live credential is escalated to CRITICAL/almost-certain; a
+        provider-rejected one is downgraded (likely a stale or example value).
+        The verdict is recorded in metadata; the secret itself is never stored.
+        """
+        from argus.scanners import secret_verify
+
+        verdict = secret_verify.verify(rule_id, secret)
+        finding.metadata["verification"] = verdict
+        if verdict == secret_verify.LIVE:
+            finding.severity = Severity.CRITICAL
+            finding.confidence = Confidence.HIGH
+            finding.likelihood = Likelihood.ALMOST_CERTAIN
+            finding.title = f"{finding.title}, VERIFIED LIVE"
+            finding.description = (
+                "VERIFIED LIVE: this credential was confirmed active against the "
+                "provider. Rotate it immediately.\n\n" + finding.description
+            )
+        elif verdict == secret_verify.INVALID:
+            finding.severity = Severity(max(Severity.LOW, finding.severity - 1))
+            finding.description = (
+                "The provider rejected this credential (invalid/expired or an "
+                "example value); still remove it from source.\n\n" + finding.description
+            )
+
+    @staticmethod
     def _redact(value: str) -> str:
         """Mask a matched secret for reports.
 
         Reports are often committed or shared, so we reveal only a short leading
-        fragment for identification — never the tail — and disclose the length so
+        fragment for identification, never the tail, and disclose the length so
         the value is still recognizable without being usable.
         """
         if len(value) <= 6:

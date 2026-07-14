@@ -34,8 +34,8 @@ _HOST_ORIGIN = {
     "bitbucket.org": "bitbucket",
 }
 
-# Only these transports are ever handed to `git clone`. Git supports others —
-# notably ``ext::`` and ``file://`` — that can execute arbitrary commands during
+# Only these transports are ever handed to `git clone`. Git supports others,
+# notably ``ext::`` and ``file://``, that can execute arbitrary commands during
 # a clone. Because Argus is routinely pointed at untrusted repositories, we allow
 # an explicit safe set and also constrain git itself via GIT_ALLOW_PROTOCOL.
 _ALLOWED_GIT_PROTOCOLS = ("https", "http", "ssh", "git")
@@ -45,7 +45,7 @@ _SCP_LIKE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:")  # git@host:owner/r
 
 @dataclass
 class WebTarget:
-    """A deployed application URL — input to the dynamic (DAST) layer."""
+    """A deployed application URL, input to the dynamic (DAST) layer."""
 
     url: str
 

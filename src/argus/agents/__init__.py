@@ -2,7 +2,7 @@
 
 Argus splits the "AI Security Engineer" role into focused agents, each with one
 job. They operate on findings after scanning: enriching the narrative, simulating
-attacks, and proposing fixes. Every agent degrades gracefully — with the
+attacks, and proposing fixes. Every agent degrades gracefully, with the
 heuristic provider it uses templated reasoning; with a real model it produces
 richer, context-aware analysis.
 """

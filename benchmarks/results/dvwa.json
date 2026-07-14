@@ -1,0 +1,17 @@
+{
+  "corpus": "dvwa",
+  "source": "https://github.com/digininja/DVWA",
+  "commit": "d45ba3c4e7efa7f023f25f58ab4af9912c887057",
+  "argus_version": "0.7.0",
+  "scan_seconds": 23.58,
+  "total_findings": 4,
+  "by_scanner": {
+    "iac": 1,
+    "dependencies": 3
+  },
+  "by_severity": {
+    "2": 1,
+    "1": 3
+  },
+  "ground_truth": null
+}

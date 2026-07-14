@@ -24,7 +24,7 @@ class EnrichmentAgent(Agent):
 
     def process(self, finding: Finding, ctx: AgentContext) -> Finding:
         # With a real model configured, always rewrite the reasoning with
-        # project-specific context — it improves on the scanner's generic text.
+        # project-specific context, it improves on the scanner's generic text.
         if self._uses_real_model(ctx):
             self._enrich_with_model(finding, ctx)
             return finding

@@ -1,6 +1,6 @@
 """Infrastructure-as-code scanner: Docker, Kubernetes, and Terraform.
 
-Checks configuration files for common insecure defaults and misconfigurations —
+Checks configuration files for common insecure defaults and misconfigurations,
 running as root, privileged containers, world-open security groups, unencrypted
 storage, and similar. Rules are line-oriented so a finding points at the exact
 offending line.
@@ -148,6 +148,7 @@ ALL_RULES = DOCKER_RULES + K8S_RULES + TERRAFORM_RULES
 class IaCScanner(Scanner):
     name = "iac"
     category = "iac"
+    file_local = True
     description = "Detects insecure Docker, Kubernetes, and Terraform configuration."
 
     def applies_to(self, project) -> bool:

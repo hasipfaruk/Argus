@@ -105,26 +105,53 @@ class Project:
         return cls(root=root, name=kwargs.pop("name", None) or root.name, **kwargs)
 
     def _ignored(self) -> set[str]:
-        return set(DEFAULT_IGNORES) | set(self.extra_ignores)
+        return set(DEFAULT_IGNORES)
+
+    def _excluded(self, rel_path: str) -> bool:
+        """True if a relative path matches any configured exclude glob.
+
+        ``extra_ignores`` (from ``exclude_paths`` in config) are treated as globs
+        against the POSIX relative path, e.g. ``examples/**``, ``*.min.js``,
+        ``src/argus/scanners/llm.py``, as well as the bare basename, so both a
+        directory subtree and a single file can be excluded.
+        """
+        name = rel_path.rsplit("/", 1)[-1]
+        for pat in self.extra_ignores:
+            if fnmatch.fnmatch(rel_path, pat) or fnmatch.fnmatch(name, pat):
+                return True
+            # `dir/**` should also match the directory prefix `dir/...`.
+            if pat.endswith("/**") and (rel_path == pat[:-3]
+                                        or rel_path.startswith(pat[:-2])):
+                return True
+        return False
 
     def iter_files(self) -> Iterator[FileRef]:
         """Walk the project, skipping ignored directories and unreadable files.
 
-        Directories and files are traversed in sorted order so that the file list
-        — and therefore finding ids and report ordering — is deterministic and
+        Directories and files are traversed in sorted order so that the file list,
+        and therefore finding ids and report ordering, is deterministic and
         reproducible across machines and filesystems.
         """
         ignores = self._ignored()
         for dirpath, dirnames, filenames in os.walk(self.root):
+            base_rel = Path(dirpath).relative_to(self.root).as_posix()
             # Sorting dirnames in place also fixes os.walk's traversal order.
-            dirnames[:] = sorted(d for d in dirnames if d not in ignores)
+            # Prune by built-in basename ignores and by exclude-glob (which lets
+            # us skip descending into an excluded subtree entirely).
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d not in ignores
+                and not self._excluded(f"{base_rel}/{d}".lstrip("/"))
+            )
             for filename in sorted(filenames):
                 abs_path = Path(dirpath) / filename
+                rel = abs_path.relative_to(self.root).as_posix()
+                if self._excluded(rel):
+                    continue
                 try:
                     size = abs_path.stat().st_size
                 except OSError:
                     continue
-                rel = abs_path.relative_to(self.root).as_posix()
                 yield FileRef(path=abs_path, rel_path=rel, size=size)
 
     def files(self) -> tuple[FileRef, ...]:

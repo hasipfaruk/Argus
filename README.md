@@ -1,47 +1,49 @@
-# Argus
+<div align="center">
 
-**An open-source AI Security Engineer.** Point it at a codebase or a running
-application; it maps the system, runs layered security analysis, explains every
-finding the way a senior application-security engineer would, and — where
-possible — proposes and verifies a fix.
+<img src="docs/assets/argus-banner.svg" alt="Argus, the open-source AI Security Engineer" width="720">
 
-Argus is not just another scanner that prints a list. For each finding it tells
-you *why* it is a vulnerability, *how* an attacker would exploit it, the *business
-impact*, the likelihood and severity, the CWE/OWASP mapping, and concrete
-remediation — and it can generate a patch and check that the patch closes the
-issue.
+<h1>Argus</h1>
 
-> Status: early alpha. The architecture and core pipeline are in place with a
-> working CLI, five built-in scanners, a multi-provider AI layer, and five report
-> formats. See the [roadmap](#roadmap).
+**Your open-source AI Security Engineer.** Point it at a codebase or a running app.
+It maps the system, runs layered security analysis, explains every finding the way
+a senior application-security engineer would, and where it can, it writes the fix
+and checks that the fix actually works.
+
+[![PyPI version](https://img.shields.io/pypi/v/argus-appsec?color=8b5cf6&label=pypi)](https://pypi.org/project/argus-appsec/)
+[![Python](https://img.shields.io/pypi/pyversions/argus-appsec?color=6ea8fe)](https://pypi.org/project/argus-appsec/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![CI](https://github.com/hasipfaruk/Argus/actions/workflows/ci.yml/badge.svg)](https://github.com/hasipfaruk/Argus/actions/workflows/ci.yml)
+[![Self-scan](https://img.shields.io/badge/self--scan-clean-brightgreen)](.github/workflows/argus-scan.yml)
+[![OWASP LLM Top 10](https://img.shields.io/badge/OWASP-LLM%20Top%2010-111c33)](https://genai.owasp.org/llm-top-10/)
+
+[Install](#install) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Docs](docs/) · [Roadmap](#roadmap)
+
+</div>
 
 ---
 
-## Highlights
+Argus is not just another scanner that prints a list. For each finding it tells you
+*why* it is a vulnerability, *how* an attacker would exploit it, the *business
+impact*, the likelihood and severity, the CWE and OWASP mapping, and concrete
+remediation. Then it can generate a patch and confirm the patch closes the issue.
 
-- **Understands the project first.** Detects languages and frameworks and builds
-  an architecture map — APIs, auth flows, datastores, third-party services, cloud,
-  containers, CI/CD, and dependency manifests — before scanning.
-- **Layered analysis.** Secret detection, dependency vulnerabilities — including
-  **transitive dependencies from lock files** across PyPI (`poetry.lock`,
-  `Pipfile.lock`), npm (`package-lock.json`, `yarn.lock`), Go (`go.mod`), Rust
-  (`Cargo.lock`), Ruby (`Gemfile.lock`), and PHP (`composer.lock`), checked against
-  the live [OSV](https://osv.dev) database — static code analysis (SAST), and
-  infrastructure-as-code checks out of the box, extensible via plugins.
-- **CI-native.** Deterministic, reproducible output; **baseline / diff-aware
-  scanning** so pull requests are gated only on newly introduced findings.
-- **Findings that teach.** Every finding carries reasoning, taxonomy mappings, and
-  remediation — not just a line number.
-- **Attack Simulation Mode.** Instead of "this is vulnerable", Argus produces a
-  safe, isolated walkthrough: how the flaw is discovered, a step-by-step
-  (non-weaponized) exploit, the data at risk, the business impact, and how the fix
-  blocks the attack — with a before/after comparison.
-- **Bring your own model.** Offline heuristic provider by default (no key, no
-  network); Anthropic and OpenAI for cloud models; Ollama for fully local models
-  so source never leaves your environment.
-- **Plugin-based throughout.** Scanners, reporters, and AI providers are plugins.
-  Add a language or a report format without touching the core.
-- **CI-ready output.** JSON, SARIF (GitHub Code Scanning), Markdown, HTML, and CSV.
+> **Status: early alpha.** The architecture and full pipeline are in place: a working
+> CLI, eight built-in scanners (including a first-class LLM/agent scanner), a
+> multi-provider AI layer, cross-file taint analysis, and six report formats. See the
+> [roadmap](#roadmap).
+
+## Why Argus
+
+| | What you get |
+|---|---|
+| :mag: **It understands the project first** | Detects languages and frameworks and builds an architecture map (APIs, auth flows, datastores, third-party services, cloud, containers, CI/CD, dependency manifests) before it scans a single line. |
+| :onion: **Layered analysis** | Secrets, dependency CVEs (live [OSV](https://osv.dev) data, transitive packages from lockfiles across PyPI, npm, Go, Rust, Ruby, PHP), SAST, tree-sitter taint analysis, and infrastructure-as-code checks, all in one pass. |
+| :robot: **Built for AI-era codebases** | A first-class LLM and agent security scanner mapped to the [OWASP Top 10 for LLM Apps](https://genai.owasp.org/llm-top-10/): insecure model-output handling, prompt injection, secrets in prompts, over-privileged agent tools, and unsafe model loading. |
+| :mute: **Low noise on purpose** | Reachability analysis marks a CVE in a package your code never imports as lower priority. Cross-file taint follows untrusted input across function and file boundaries so real bugs surface and false alarms stay quiet. |
+| :lock: **Your code stays yours** | Offline heuristic provider by default (no key, no network). Ollama runs models fully locally. Anthropic and OpenAI are opt-in for teams that want cloud models. |
+| :hammer_and_wrench: **It fixes, not just finds** | Deterministic, self-verified fixes go to a fresh branch and open a pull request. An AI-proposed tier drafts riskier fixes, verifies them, and labels them for human review. Nothing risky is ever auto-applied. |
+| :vertical_traffic_light: **CI-native** | Deterministic output, SARIF and GitLab reports, and diff-aware scanning so pull requests are gated only on findings they introduce. One-block GitHub Action, pre-commit hooks, and a Docker image. |
+| :jigsaw: **Plugin-based throughout** | Scanners, reporters, and AI providers are plugins. Add a language, a report format, or even a rule in plain YAML without touching the core. |
 
 ## Install
 
@@ -52,11 +54,14 @@ pip install argus-appsec
 # With cloud model support
 pip install "argus-appsec[anthropic,openai]"
 
-# With the AST data-flow tier (deeper Python taint analysis, via tree-sitter)
+# With the AST data-flow tier (deeper Python/JS taint analysis, via tree-sitter)
 pip install "argus-appsec[ast]"
+
+# With the optional web dashboard (scan history and risk trends)
+pip install "argus-appsec[dashboard]"
 ```
 
-From source (for development):
+From source, for development:
 
 ```bash
 git clone https://github.com/hasipfaruk/Argus
@@ -64,7 +69,7 @@ cd Argus
 pip install -e ".[dev]"
 ```
 
-Requires Python 3.10+. The command installed is `argus`.
+Requires Python 3.10+. The installed command is `argus`.
 
 ## Quick start
 
@@ -84,11 +89,11 @@ argus fix ./my-app --open-pr
 # Use a local model so code stays on your machine
 argus scan ./my-app --ai-provider ollama --ai-model llama3.1
 
-# Machine-readable output for CI, failing the build on High+
+# Machine-readable output for CI, failing the build on High and above
 argus scan ./my-app -f sarif -o results.sarif --fail-on high
 ```
 
-Explore what's available:
+Explore what is available:
 
 ```bash
 argus scanners     # list scanners
@@ -97,18 +102,43 @@ argus providers    # list AI providers and whether each is usable right now
 argus init         # write a starter .argus.yml
 ```
 
+## CI in one block
+
+The official GitHub Action uploads findings to GitHub Code Scanning and is
+diff-aware on pull requests, so merges are gated only on findings a PR
+*introduces*, never on pre-existing ones:
+
+```yaml
+permissions:
+  contents: read
+  security-events: write
+steps:
+  - uses: actions/checkout@v4
+    with: { fetch-depth: 0 }
+  - uses: hasipfaruk/Argus@v0.7.0
+    with:
+      fail-on: high
+```
+
+You also get [pre-commit hooks](docs/ci-cd.md#pre-commit-hook) that block secrets
+before they enter git history, an official Docker image (`ghcr.io/hasipfaruk/argus`),
+and GitLab CI and Bitbucket Pipelines snippets. See [docs/ci-cd.md](docs/ci-cd.md).
+
 ## How it works
 
 ```
-target ──▶ resolve ──▶ analyze ──▶ scan ──▶ enrich (agents) ──▶ report
-          (path/git/    (languages,  (secrets,   (reasoning,        (json, sarif,
-           url)          frameworks,  deps,        attack sim,        markdown,
-                         architecture) sast, iac)  patches)           html, csv)
+ target  -->  resolve   -->  analyze    -->  scan      -->  enrich     -->  report
+             path/git/     languages,     secrets,       reasoning,      json, sarif,
+             url           frameworks,    deps, sast,     attack sim,     gitlab, md,
+                           architecture   iac, llm        patches         html, csv
 ```
 
-The engine is synchronous and side-effect free apart from reading the target: it
-returns a `ScanResult` and writes nothing. Reporting and any PR creation are
-separate, explicit steps. See [docs/architecture.md](docs/architecture.md).
+The engine never modifies the target. It returns a `ScanResult`, and its only write
+is to Argus's own cache (`--no-cache` disables even that). Scanners run concurrently
+and unchanged files reuse cached findings, so warm scans stay fast
+([measured numbers](docs/performance.md)) while reports stay deterministic, byte for
+byte. Reporting and any pull-request creation are separate, explicit steps. See
+[docs/architecture.md](docs/architecture.md).
 
 ## Configuration
 
@@ -131,7 +161,7 @@ Full reference: [docs/configuration.md](docs/configuration.md).
 
 ## Extending Argus
 
-Everything is a plugin. A minimal scanner:
+Everything is a plugin. Here is a whole scanner:
 
 ```python
 from argus.core.plugin import Scanner, ScannerContext, scanner
@@ -155,8 +185,10 @@ class HelloScanner(Scanner):
                     )
 ```
 
-Register it via the `argus.plugins` entry point in your package and it is picked
-up automatically. Full guide: [docs/plugins.md](docs/plugins.md).
+Register it via the `argus.plugins` entry point in your package and Argus picks it up
+automatically. Prefer regex over code? You can add a rule in plain
+[YAML](docs/plugins.md#community-rules-yaml-no-python) instead. Full guide:
+[docs/plugins.md](docs/plugins.md).
 
 ## AI providers and data handling
 
@@ -167,14 +199,13 @@ up automatically. Full guide: [docs/plugins.md](docs/plugins.md).
 | `anthropic` | cloud    | yes                         | `ANTHROPIC_API_KEY` + `[anthropic]` extra |
 | `openai`    | cloud    | yes                         | `OPENAI_API_KEY` + `[openai]` extra |
 
-If a requested provider is unavailable, Argus warns and falls back to `heuristic`
-so a scan always completes.
+If a requested provider is unavailable, Argus warns and falls back to `heuristic` so a
+scan always completes.
 
 ## Fixing, not just finding
 
-`argus fix` closes the loop: it scans a repository, applies the fixes it can
-verify locally to a fresh branch, commits them, and (with `--open-pr`) opens a
-pull request.
+`argus fix` closes the loop. It scans a repository, applies the fixes it can verify
+locally to a fresh branch, commits them, and with `--open-pr` opens a pull request.
 
 ```bash
 argus fix ./my-app --dry-run      # preview the changes, write nothing
@@ -182,55 +213,77 @@ argus fix ./my-app                # apply fixes to a branch and commit locally
 argus fix ./my-app --open-pr      # also push and open a PR (needs GITHUB_TOKEN)
 ```
 
-Only deterministic, self-verified fixes are applied by default (e.g. unsafe
-`yaml.load` → `yaml.safe_load`, weak hashes → SHA-256, `shell=True` removal,
-`debug=True` → `debug=False`). See [docs/fixing.md](docs/fixing.md).
+Only deterministic, self-verified fixes are applied by default. Examples: unsafe
+`yaml.load` becomes `yaml.safe_load`, weak hashes become SHA-256, `shell=True` is
+removed, `debug=True` becomes `debug=False`, and `torch.load` gains
+`weights_only=True`. See [docs/fixing.md](docs/fixing.md).
 
 ## Roadmap
 
-Implemented: project analysis, secrets/dependency/SAST/IaC scanners, live OSV
-vulnerability data, multi-provider AI enrichment, Attack Simulation Mode,
-deterministic patch generation with self-verification, **automated fix branches
-and pull requests** (`argus fix`), baseline / diff-aware scanning, and
-JSON/SARIF/Markdown/HTML/CSV reporting.
+**Implemented.** Project analysis; secrets, dependency, SAST, and IaC scanners; a
+first-class LLM and agent security scanner (OWASP LLM Top 10); live OSV vulnerability
+data; multi-provider AI enrichment; Attack Simulation Mode; deterministic patch
+generation with self-verification; automated fix branches and pull requests
+(`argus fix`); baseline and diff-aware scanning; dependency reachability analysis;
+opt-in secret verification; safe runtime posture checks for a live URL; per-file
+caching and parallel scanners; and JSON, SARIF, GitLab, Markdown, HTML, and CSV
+reporting.
 
-In progress: AST-based data-flow scanning — a tree-sitter taint analyzer for
-**Python** ships today (`pip install "argus-appsec[ast]"`); more languages next.
+**Deep code analysis.** AST data-flow scanning ships for Python and
+JavaScript/TypeScript (`pip install "argus-appsec[ast]"`), tree-sitter taint analysis
+that follows untrusted input through multiple hops into a sink and treats
+parameterized queries and sanitized values as safe. For Python it also includes a
+cross-file, inter-procedural tier that follows taint one hop across a function and
+file boundary. Go ships SAST rules today, with more languages next.
 
-Planned: dynamic analysis (DAST) for deployed URLs, the web dashboard (trends,
-timelines, collaboration), and richer compliance rule packs.
+**Author rules in YAML.** Add SAST rules with only regex and a few fields, no Python,
+via `.argus/rules/*.yml` or `scanner_options.patterns.rules`. See
+[docs/plugins.md](docs/plugins.md#community-rules-yaml-no-python).
+
+**Web dashboard.** Scan history and risk trends ship as an optional extra:
+`pip install "argus-appsec[dashboard]"` then `argus dashboard`. See
+[docs/dashboard.md](docs/dashboard.md).
+
+**Distribution.** An official GitHub Action, pre-commit hooks, and a published Docker
+image. See [docs/ci-cd.md](docs/ci-cd.md).
+
+**Planned.** Full dynamic analysis (DAST) building on the posture layer, deeper taint
+depth (multi-hop cross-file), more deep-analysis languages, team collaboration on the
+dashboard, and richer compliance rule packs.
 
 ## Known limitations
 
-Argus is an early-stage tool and honest about what it does not yet do — a security
-scanner you can't trust is worse than none:
+Argus is early-stage and honest about what it does not yet do, because a security
+scanner you cannot trust is worse than none:
 
-- **Static analysis only.** It reads code; it does not run your app or test a live
-  URL (no DAST yet).
-- **Deepest for Python and JavaScript/TypeScript.** Other languages are detected
-  and covered by the secrets, dependency, and IaC scanners, but have limited
-  code-level (SAST) rules so far.
-- **Code scanning has blind spots.** The default regex tier catches common
-  patterns; the optional AST tier (`[ast]`, Python) follows multi-hop data flows.
-  But cross-file and cross-function flows can still be missed. Treat a clean result
-  as "no known issues found," not a proof of safety.
+- **Primarily static analysis.** It reads code rather than running your app. The
+  `--live-target` posture layer adds safe, read-only runtime checks (headers,
+  cookies, TLS, exposed paths), but it is not full DAST. There is no crawling,
+  fuzzing, or exploitation.
+- **Deepest for Python and JavaScript/TypeScript.** Other languages are detected and
+  covered by the secrets, dependency, LLM, and IaC scanners, and Go has SAST rules,
+  but code-level coverage for the rest is limited so far.
+- **Code scanning has blind spots.** The default regex tier catches common patterns.
+  The optional AST tier follows multi-hop and one-hop cross-file data flows and avoids
+  common false positives, but deeper multi-hop cross-file flows can still be missed.
+  Treat a clean result as "no known issues found," not a proof of safety.
 - **Dependency coverage depends on OSV.** Offline, it falls back to a small bundled
-  advisory seed (PyPI/npm) and will say so.
+  advisory seed (PyPI and npm) and tells you so.
 
-Treat Argus as a strong, fast first line of defense — not a replacement for a
-manual security review of critical code.
+Treat Argus as a strong, fast first line of defense, not a replacement for a manual
+security review of critical code.
 
 ## Contributing
 
 Contributions are welcome from everyone. The flow is the standard one:
 
 1. **Fork** this repository.
-2. Create a branch and make your change (with tests).
-3. Open a **pull request** — the template will guide you, and CI runs tests and
-   lint automatically.
+2. Create a branch and make your change, with tests.
+3. Open a **pull request**. The template will guide you, and CI runs tests and lint
+   automatically.
 
 Scanners, language support, compliance rules, and report formats are especially
-welcome — the plugin model means most additions never touch the core. See
+welcome, and the plugin model means most additions never touch the core. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for setup and standards, and
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community guidelines.
 

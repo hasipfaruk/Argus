@@ -3,7 +3,7 @@
 # Copy this into your own repository's .github/workflows/ to get Argus findings
 # as annotations on pull requests and in the Security tab. On pull requests the
 # scan is *diff-aware*: it first scans the base branch to build a baseline, then
-# reports only findings that are new in the PR — so you are never blocked by
+# reports only findings that are new in the PR, so you are never blocked by
 # pre-existing issues, only by ones the PR introduces.
 name: Argus Security Scan
 

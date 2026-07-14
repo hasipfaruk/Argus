@@ -128,7 +128,7 @@ class Finding(BaseModel):
 
     A finding is more than "line X is vulnerable". It carries the reasoning a
     reviewer needs: why it matters, how it is exploited, its impact, and how to
-    fix it — plus the taxonomy mappings tools downstream expect.
+    fix it, plus the taxonomy mappings tools downstream expect.
     """
 
     # Identity
@@ -175,7 +175,9 @@ class Finding(BaseModel):
         """
         basis = re.sub(r"\s+", "", self.location.snippet or "")
         if basis:
-            digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
+            # Non-security digest: a stable content fingerprint for de-duplication,
+            # never an integrity/auth check, so SHA-1 is fine here.
+            digest = hashlib.sha1(basis.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
             return f"{self.rule_id}|{self.location.path}|{digest}"
         return f"{self.rule_id}|{self.location.path}|L{self.location.start_line}"
 
@@ -224,7 +226,7 @@ class ScanResult(BaseModel):
     def aggregate_risk(self) -> float:
         """A single 0–100 risk number for the whole target.
 
-        Not a mean — a single critical should dominate a pile of lows. We take a
+        Not a mean, a single critical should dominate a pile of lows. We take a
         softmax-ish blend: the worst finding sets the floor, volume nudges it up.
         """
         if not self.findings:

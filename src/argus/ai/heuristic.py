@@ -3,8 +3,8 @@
 This is the default so that ``argus scan`` produces useful, self-contained output
 with no API key and no network. Instead of calling a model, it fills the
 AI-authored fields of a finding from templates keyed on the finding's taxonomy
-(CWE / OWASP / category). It is intentionally deterministic — good for tests and
-for air-gapped environments — and is transparently weaker than a real model.
+(CWE / OWASP / category). It is intentionally deterministic, good for tests and
+for air-gapped environments, and is transparently weaker than a real model.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ _CWE_NOTES: dict[str, dict[str, str]] = {
         "attack": "Supply input such as `' OR '1'='1` (or a UNION/stacked query) in "
                   "the affected parameter to read, modify, or destroy data the "
                   "application should not expose.",
-        "impact": "Full read/write access to the database — credential theft, data "
+        "impact": "Full read/write access to the database, credential theft, data "
                   "exfiltration, and in some configurations remote code execution.",
     },
     "CWE-78": {
@@ -74,7 +74,7 @@ _CWE_NOTES: dict[str, dict[str, str]] = {
         "why": "A dependency version with a known published vulnerability is in use.",
         "attack": "Use the public exploit or advisory details for the known CVE "
                   "against the running application.",
-        "impact": "Whatever the upstream advisory describes — ranges from information "
+        "impact": "Whatever the upstream advisory describes, ranges from information "
                   "disclosure to remote code execution.",
     },
 }

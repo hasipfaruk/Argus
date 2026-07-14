@@ -1,0 +1,31 @@
+# Argus hooks for the pre-commit framework (https://pre-commit.com).
+#
+# Usage, add to your project's .pre-commit-config.yaml:
+#
+#   repos:
+#     - repo: https://github.com/hasipfaruk/Argus
+#       rev: v0.7.0
+#       hooks:
+#         - id: argus-secrets          # fast: secrets only, ideal for every commit
+#         # - id: argus                # fuller static scan; heavier, better in CI
+#
+# Both hooks scan the repository (not just staged files) so cross-file context,
+# lockfiles, configs, imports, stays available. The secrets hook is the one
+# meant to run on every commit: catching a credential *before* it enters git
+# history is the highest-value moment for secrets detection.
+- id: argus-secrets
+  name: argus (secrets)
+  description: Block commits that introduce hardcoded secrets or credentials.
+  entry: argus scan . --scanners secrets --fail-on high --no-ai --quiet
+  language: python
+  pass_filenames: false
+
+- id: argus
+  name: argus (full static scan)
+  description: >-
+    Full Argus static scan: secrets, dependency vulnerabilities (OSV), SAST
+    patterns, taint analysis, and IaC checks. Heavier than argus-secrets;
+    consider `stages: [pre-push]` or CI instead of every commit.
+  entry: argus scan . --fail-on high --no-ai --quiet
+  language: python
+  pass_filenames: false

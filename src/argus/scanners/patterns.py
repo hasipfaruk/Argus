@@ -3,7 +3,7 @@
 This is a lightweight, regex-based SAST pass. Coverage is deepest for Python and
 JavaScript/TypeScript, plus a few language-agnostic checks (weak hashing, disabled
 TLS verification, path traversal). It is intentionally rule-driven: each rule is a
-small dataclass, and adding coverage — including new languages — means appending a
+small dataclass, and adding coverage, including new languages, means appending a
 rule, not touching the scanner. A plugin can register a more precise, AST-based
 scanner for a specific language and coexist with this one.
 
@@ -61,7 +61,7 @@ RULES: list[Rule] = [
         id="python-sql-fstring",
         title="Possible SQL injection via f-string query",
         # An f-string that builds SELECT/INSERT/... with FROM/WHERE/... and an
-        # interpolation is almost always SQL injection — wherever it is run,
+        # interpolation is almost always SQL injection, wherever it is run,
         # including when assigned to a variable first and passed to execute() later
         # (which line-anchored, execute()-only patterns miss).
         pattern=_rx(r"(?i)f['\"][^\n]*?\b(select|insert|update|delete)\b[^\n]*?\b(from|where|into|set|values)\b[^\n]*?\{[^}]*\}"),
@@ -100,7 +100,9 @@ RULES: list[Rule] = [
         title="Possible SQL injection via string concatenation",
         pattern=_rx(r"(?i)(query|execute)\s*\(\s*[`'\"].*?(select|insert|update|delete).*?[`'\"]\s*\+|\$\{[^}]+\}.*?(from|where)"),
         severity=Severity.HIGH, cwe=["CWE-89"], owasp=["A03:2021-Injection"],
-        languages={"JavaScript", "TypeScript"}, confidence=Confidence.MEDIUM,
+        # Heuristic (no taint/parameterization awareness). The `ast-js` tier is the
+        # authoritative, low-false-positive check when the [ast] extra is installed.
+        languages={"JavaScript", "TypeScript"}, confidence=Confidence.LOW,
         why="A SQL query is built by concatenating or interpolating variables into "
             "the query string.",
         attack="Inject SQL metacharacters through the interpolated value to change "
@@ -148,6 +150,69 @@ RULES: list[Rule] = [
         impact="Remote code execution on the host.",
         fix="Use execFile/spawn with an argument array instead of exec with an "
             "interpolated string.",
+    ),
+    # --- Go ---
+    Rule(
+        id="go-sql-sprintf",
+        title="Possible SQL injection via fmt.Sprintf in a query",
+        # A query/exec call whose argument is built with fmt.Sprintf or string
+        # concatenation, rather than passed as bound parameters.
+        pattern=_rx(r"(?i)\.(Query|QueryRow|Exec|QueryContext|ExecContext)\w*\(\s*"
+                    r"(fmt\.Sprintf\(|[^,)]*\+)"),
+        severity=Severity.HIGH, cwe=["CWE-89"], owasp=["A03:2021-Injection"],
+        languages={"Go"}, confidence=Confidence.MEDIUM,
+        why="A SQL statement is assembled with fmt.Sprintf or concatenation and then "
+            "executed, so input can change the query structure.",
+        attack="Supply SQL metacharacters in the interpolated value to alter the "
+               "statement.",
+        impact="Unauthorized data access or modification.",
+        fix="Use parameter placeholders ($1, ?) with db.Query(query, args...); never "
+            "build SQL with fmt.Sprintf or +.",
+    ),
+    Rule(
+        id="go-command-injection",
+        title="Command execution via a shell in Go",
+        # exec.Command invoking a shell ("sh -c" / "bash -c" / cmd /C) is the
+        # classic command-injection shape when the command string is dynamic.
+        pattern=_rx(r'exec\.Command(?:Context)?\(\s*["`](?:/bin/)?(?:sh|bash|zsh)["`]\s*,\s*["`]-c["`]'
+                    r'|exec\.Command(?:Context)?\(\s*["`]cmd(?:\.exe)?["`]\s*,\s*["`]/[cC]["`]'),
+        severity=Severity.HIGH, cwe=["CWE-78"], owasp=["A03:2021-Injection"],
+        languages={"Go"}, confidence=Confidence.MEDIUM,
+        why="Running a command through `sh -c` (or `cmd /C`) sends the argument to a "
+            "shell, so interpolated input can inject additional commands.",
+        attack="Include shell metacharacters (`;`, `|`, backticks) in the command "
+               "string.",
+        impact="Remote code execution on the host.",
+        fix="Call the target binary directly via exec.Command(bin, arg1, arg2, ...) "
+            "with separate arguments; do not invoke a shell.",
+    ),
+    Rule(
+        id="go-weak-hash",
+        title="Weak hash algorithm (MD5/SHA1) in Go",
+        pattern=_rx(r"\b(md5|sha1)\.(New|Sum)\("),
+        severity=Severity.MEDIUM, cwe=["CWE-327"],
+        owasp=["A02:2021-Cryptographic Failures"],
+        languages={"Go"}, confidence=Confidence.MEDIUM,
+        why="MD5 and SHA-1 are cryptographically broken and must not be used for "
+            "integrity or password hashing.",
+        attack="Exploit collision weaknesses, or brute-force these fast hashes.",
+        impact="Forged signatures/integrity checks or cracked password hashes.",
+        fix="Use crypto/sha256 (or bcrypt/argon2 for passwords) instead.",
+    ),
+    Rule(
+        id="go-ssrf-request",
+        title="Possible SSRF: HTTP request to a dynamic URL",
+        pattern=_rx(r"(?i)http\.(Get|Post|Head)\(\s*(?![\"`])[^),]*\b(r\.|req\.|"
+                    r"request\.|param|input|user|query)"),
+        severity=Severity.MEDIUM, cwe=["CWE-918"], owasp=["A10:2021-SSRF"],
+        languages={"Go"}, confidence=Confidence.LOW,
+        why="An outbound HTTP request targets a URL derived from input, which can be "
+            "pointed at internal services.",
+        attack="Supply a URL like http://169.254.169.254/ to reach cloud metadata or "
+               "internal endpoints.",
+        impact="Server-side request forgery: access to internal services or metadata.",
+        fix="Validate the URL against an allowlist of hosts/schemes before requesting "
+            "it.",
     ),
     # --- Code evaluation / deserialization ---
     Rule(
@@ -287,7 +352,7 @@ def _is_test_file(path: str) -> bool:
 # narrow heuristic catches the common, high-value case the line-anchored rules
 # miss: a filesystem path taken straight from untrusted input into a file
 # operation, even when the value passes through a variable across lines. It only
-# fires when BOTH a source and a sink are present, and backs off on sanitizers —
+# fires when BOTH a source and a sink are present, and backs off on sanitizers,
 # so it stays low-noise rather than flagging every open() of a variable.
 _TAINT_SOURCE = re.compile(
     r"request\.(args|form|values|json|data|files|cookies|headers|query_params|GET|POST)\b"
@@ -305,6 +370,7 @@ _PATH_SANITIZER = re.compile(r"secure_filename|os\.path\.basename|werkzeug|safe_
 class PatternScanner(Scanner):
     name = "patterns"
     category = "sast"
+    file_local = True
     description = "Regex-based static analysis for common injection and misuse classes."
 
     # Only source-y files; skip data/asset languages entirely.
@@ -314,14 +380,27 @@ class PatternScanner(Scanner):
         # Nothing to do on a project with no scannable source (e.g. pure IaC/docs).
         return any(f.language not in self._SKIP_LANGS for f in project.files())
 
+    def cacheable(self, ctx: ScannerContext) -> bool:
+        # Custom rules can change on disk without any scanned file changing, so a
+        # run that loads them opts out of the per-file cache to stay correct.
+        rules_opt = ctx.config.options_for(self.name).get("rules")
+        from argus.scanners.custom_rules import config_signature
+        return self.file_local and not config_signature(ctx.project.root, rules_opt)
+
+    def _effective_rules(self, ctx: ScannerContext) -> list[Rule]:
+        rules_opt = ctx.config.options_for(self.name).get("rules")
+        from argus.scanners.custom_rules import load_custom_rules
+        return [*RULES, *load_custom_rules(ctx.project.root, rules_opt)]
+
     def scan(self, ctx: ScannerContext) -> Iterable[Finding]:
         counter = 0
+        rules = self._effective_rules(ctx)
         for f in ctx.project.files():
             if f.language in self._SKIP_LANGS or f.is_probably_binary():
                 continue
             in_test = _is_test_file(f.rel_path)
             lines = f.lines()
-            for rule in RULES:
+            for rule in rules:
                 if rule.languages and f.language not in rule.languages:
                     continue
                 for lineno, line in enumerate(lines, start=1):

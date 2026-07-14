@@ -12,8 +12,10 @@ multiple hops, so it catches injection that the regex tier misses:
 
 It is **optional**: tree-sitter is an extra (``pip install "argus-appsec[ast]"``).
 Without it the scanner reports as not-applicable and Argus falls back to the
-regex tier — nothing breaks. Analysis is intra-file and per-function-scope, which
-keeps it fast and low-noise; whole-program and cross-file flow remain future work.
+regex tier, nothing breaks. Analysis here is intra-file and per-function-scope,
+which keeps it fast and low-noise; a companion depth-1 cross-file/inter-procedural
+tier lives in :mod:`argus.scanners.ast_python_interproc`, and deeper multi-hop
+whole-program flow remains future work.
 """
 
 from __future__ import annotations
@@ -34,9 +36,14 @@ from argus.core.models import (
 from argus.core.plugin import Scanner, ScannerContext, scanner
 
 
-@lru_cache(maxsize=1)
-def _load_parser():
-    """Return a tree-sitter (Parser, Language) for Python, or None if unavailable."""
+def new_parser():
+    """Build a fresh tree-sitter Python parser, or None if unavailable.
+
+    A tree-sitter ``Parser`` is not safe to call from two threads at once, and
+    scanners now run concurrently. Anything that parses on its own thread (e.g.
+    the cross-file scanner) must take its **own** parser via this function rather
+    than sharing the cached one below.
+    """
     try:
         import tree_sitter_python as tspython
         from tree_sitter import Language, Parser
@@ -49,6 +56,16 @@ def _load_parser():
         parser = Parser()
         parser.set_language(lang)
         return parser
+
+
+@lru_cache(maxsize=1)
+def _load_parser():
+    """Shared, cached parser for the single-threaded intra-file scanner.
+
+    Only the ``ast-python`` scanner uses this, and its ``scan`` walks files
+    sequentially on one worker thread, so a single shared instance is safe here.
+    """
+    return new_parser()
 
 
 def is_available() -> bool:
@@ -138,7 +155,7 @@ SINKS: list[Sink] = [
     ),
 ]
 
-# Test/fixture paths — findings there are downgraded, matching the regex scanner.
+# Test/fixture paths, findings there are downgraded, matching the regex scanner.
 from argus.scanners.patterns import _is_test_file  # noqa: E402  (shared helper)
 
 
@@ -146,6 +163,7 @@ from argus.scanners.patterns import _is_test_file  # noqa: E402  (shared helper)
 class ASTPythonScanner(Scanner):
     name = "ast-python"
     category = "sast"
+    file_local = True
     description = ("Data-flow (taint) analysis for Python via tree-sitter; catches "
                    "multi-hop injection the regex tier misses. Needs the [ast] extra.")
 
@@ -181,6 +199,22 @@ class _Analyzer:
 
     def run(self, root) -> Iterable[Finding]:
         yield from self._walk(root, set())
+
+    def seeded_sinks(self, body, seed_names: set[str]) -> list[tuple[str, int]]:
+        """Sinks reachable in ``body`` when ``seed_names`` start tainted.
+
+        Used by the inter-procedural pass to decide which *parameters* of a
+        function flow into a sink (seed each parameter, see what fires). Returns
+        (sink_id, line) pairs. Does not mutate this analyzer's dedup state.
+        """
+        saved = self._seen
+        self._seen = set()
+        try:
+            found = [(f.rule_id.split(".", 1)[-1], f.location.start_line or 0)
+                     for f in self._walk(body, set(seed_names))]
+        finally:
+            self._seen = saved
+        return found
 
     # --- traversal ----------------------------------------------------------
     def _walk(self, node, tainted: set[str]) -> Iterable[Finding]:

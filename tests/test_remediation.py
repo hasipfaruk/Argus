@@ -33,11 +33,74 @@ def test_fix_line_unknown_rule_returns_none():
     assert fix_line("patterns.nonexistent", "whatever") is None
 
 
+def test_fix_line_llm_rules():
+    # trust_remote_code=True -> False, and the detection then clears.
+    fixed = fix_line("llm.trust-remote-code",
+                     "m = AutoModel.from_pretrained('x', trust_remote_code=True)")
+    assert "trust_remote_code=False" in fixed
+    assert verify_line_fixed("llm.trust-remote-code", fixed) is True
+
+    # torch.load gains weights_only=True, clearing the pickle detection.
+    fixed = fix_line("llm.torch-load-pickle", "w = torch.load('model.bin')")
+    assert "weights_only=True" in fixed
+    assert verify_line_fixed("llm.torch-load-pickle", fixed) is True
+
+    # Already-safe torch.load is left alone.
+    assert fix_line("llm.torch-load-pickle",
+                    "w = torch.load('m', weights_only=True)") is None
+
+
 def test_verify_line_fixed():
     fixed = fix_line("patterns.python-yaml-load", "yaml.load(x)")
     assert verify_line_fixed("patterns.python-yaml-load", fixed) is True
     # The original still trips the detection.
     assert verify_line_fixed("patterns.python-yaml-load", "yaml.load(x)") is False
+
+
+# --- patch agent tiers -----------------------------------------------------
+def _agent_ctx(ai, tmp_path):
+    from argus.core.project import Project
+    return __import__("argus.agents.base", fromlist=["AgentContext"]).AgentContext(
+        project=Project.from_path(tmp_path), config=Config(), ai=ai)
+
+
+def test_patch_deterministic_tier_labeled(tmp_path):
+    from argus.agents.patch import PatchAgent
+    from argus.ai.heuristic import HeuristicProvider
+
+    f = Finding(id="x", rule_id="patterns.python-yaml-load", scanner="patterns",
+                title="t", description="d",
+                location=Location(path="a.py", start_line=1,
+                                  snippet="data = yaml.load(raw)"),
+                severity=Severity.HIGH)
+    PatchAgent().process(f, _agent_ctx(HeuristicProvider(), tmp_path))
+    assert f.remediation.patch and "safe_load" in f.remediation.patch
+    assert f.remediation.verified is True
+    assert f.metadata["patch_source"] == "deterministic"
+
+
+def test_patch_ai_tier_labeled_for_review(tmp_path):
+    from argus.agents.patch import PatchAgent
+    from argus.ai.base import AIProvider
+
+    class _FakeModel(AIProvider):
+        name = "fake-model"
+        is_remote = False
+
+        def complete(self, system, user):
+            # Return a fixed snippet the deterministic tier would not produce.
+            return "cursor.execute('SELECT * FROM t WHERE id = ?', (uid,))"
+
+    f = Finding(id="x", rule_id="patterns.python-sql-format", scanner="patterns",
+                title="SQLi", description="d",
+                location=Location(path="a.py", start_line=1,
+                                  snippet="cursor.execute('SELECT * FROM t WHERE id = %s' % uid)"),
+                severity=Severity.HIGH, cwe=["CWE-89"])
+    PatchAgent().process(f, _agent_ctx(_FakeModel(), tmp_path))
+    assert f.remediation.patch
+    assert f.metadata["patch_source"] == "ai-proposed"
+    assert f.metadata["patch_review"] == "human-review-required"
+    assert "review before merging" in f.remediation.guidance.lower()
 
 
 # --- applier ---------------------------------------------------------------

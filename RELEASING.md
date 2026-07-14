@@ -17,7 +17,7 @@ The package is published as **`argus-appsec`** (the installed command is `argus`
 
 ### 2. Add a "pending" trusted publisher
 
-This tells PyPI to trust releases coming from your GitHub repo — before the
+This tells PyPI to trust releases coming from your GitHub repo, before the
 project even exists on PyPI.
 
 - Go to <https://pypi.org/manage/account/publishing/>.
@@ -32,7 +32,7 @@ project even exists on PyPI.
 ### 3. Create the GitHub environment
 
 - In your repo: **Settings → Environments → New environment**.
-- Name it exactly `pypi` and save. (No secrets needed — OIDC handles auth.)
+- Name it exactly `pypi` and save. (No secrets needed, OIDC handles auth.)
 
 That's it for setup.
 
@@ -55,9 +55,9 @@ That's it for setup.
 
 Argus follows [Semantic Versioning](https://semver.org):
 
-- **PATCH** (`0.5.2`) — bug fixes, no behavior change.
-- **MINOR** (`0.2.0`) — new features, backward compatible (new scanner, format).
-- **MAJOR** (`1.0.0`) — breaking changes to the CLI or plugin API.
+- **PATCH** (`0.5.2`), bug fixes, no behavior change.
+- **MINOR** (`0.2.0`), new features, backward compatible (new scanner, format).
+- **MAJOR** (`1.0.0`), breaking changes to the CLI or plugin API.
 
 During alpha (`0.x`) minor versions may still change behavior; call it out in the
 release notes.
