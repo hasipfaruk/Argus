@@ -7,7 +7,7 @@ Config resolution order (later wins):
 3. A file passed explicitly with ``--config``.
 4. CLI flags.
 
-Kept deliberately small — every field maps to something a user actually tunes.
+Kept deliberately small, every field maps to something a user actually tunes.
 """
 
 from __future__ import annotations
@@ -46,8 +46,12 @@ class Config:
     attack_simulation: bool = False
     # Attempt to generate patches for findings.
     generate_patches: bool = False
-    # Fail the process (non-zero exit) at/above this severity — for CI gating.
+    # Fail the process (non-zero exit) at/above this severity, for CI gating.
     fail_on: Severity | None = None
+    # Reuse cached findings for unchanged files (file-local scanners only).
+    cache: bool = True
+    # Run scanners concurrently. Output stays deterministic either way.
+    parallel: bool = True
 
     ai: AIConfig = field(default_factory=AIConfig)
 
@@ -82,6 +86,8 @@ class Config:
         cfg.attack_simulation = bool(data.get("attack_simulation", cfg.attack_simulation))
         cfg.generate_patches = bool(data.get("generate_patches", cfg.generate_patches))
         cfg.scanner_options = dict(data.get("scanner_options", {}))
+        cfg.cache = bool(data.get("cache", cfg.cache))
+        cfg.parallel = bool(data.get("parallel", cfg.parallel))
         if "min_severity" in data:
             cfg.min_severity = Severity.parse(data["min_severity"])
         if data.get("fail_on"):

@@ -63,7 +63,7 @@ def run_fix_workflow(project: Project, findings: list[Finding],
         report = apply_fixes(project, findings,
                              include_unverified=options.include_unverified, dry_run=True)
         outcome = FixOutcome(applied=report)
-        outcome.note(report.summary() + " (dry run — no files written)")
+        outcome.note(report.summary() + " (dry run, no files written)")
         return outcome
 
     if not git_ops.git_available():
@@ -194,7 +194,7 @@ def _pr_body(report: ApplyReport) -> str:
     ]
     for f in report.fixes:
         lines.append(f"| `{f.path}` | {f.line} | `{f.rule_id}` | "
-                     f"{'✅' if f.verified else '—'} |")
+                     f"{'yes' if f.verified else 'no'} |")
     lines += [
         "",
         "<details><summary>Diffs</summary>",

@@ -11,12 +11,12 @@ Enable it with `--attack-sim` or `attack_simulation: true` in config.
 For every finding at Medium severity or above, Argus generates an
 `ExploitScenario` with six parts:
 
-1. **Discovery** — how an attacker would find the weakness in the first place.
-2. **Walkthrough** — a step-by-step, read-only explanation of the exploit.
-3. **Data at risk** — what could actually be exposed or changed.
-4. **Business impact** — the consequence in plain language.
-5. **How the fix blocks it** — why the recommended remediation stops the attack.
-6. **Before / after** — a concise comparison of the vulnerable and fixed states.
+1. **Discovery**, how an attacker would find the weakness in the first place.
+2. **Walkthrough**, a step-by-step, read-only explanation of the exploit.
+3. **Data at risk**, what could actually be exposed or changed.
+4. **Business impact**, the consequence in plain language.
+5. **How the fix blocks it**, why the recommended remediation stops the attack.
+6. **Before / after**, a concise comparison of the vulnerable and fixed states.
 
 These appear in the Markdown and HTML reports (in a collapsible section) and in
 the JSON output under each finding's `exploit` field.
@@ -55,7 +55,7 @@ For a SQL injection finding, the offline simulation reads roughly:
 > parameter. 3. The WHERE clause becomes always-true, returning rows the user
 > should not see. 4. Escalate with UNION SELECT to read other tables.
 >
-> **Data at risk:** Any data reachable by the database user — often user records,
+> **Data at risk:** Any data reachable by the database user, often user records,
 > password hashes, tokens, and PII.
 >
 > **How the fix blocks it:** Parameterized queries bind input as data, so

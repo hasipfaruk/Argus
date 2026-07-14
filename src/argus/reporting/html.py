@@ -1,4 +1,4 @@
-"""HTML reporter — a self-contained, styled report.
+"""HTML reporter, a self-contained, styled report.
 
 Produces a single HTML file with all CSS inlined (no external assets), so it can
 be opened directly, emailed, or published as a CI artifact. The same data drives
@@ -44,7 +44,7 @@ class HTMLReporter(Reporter):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Argus Report — {_esc(s.get('name', result.target))}</title>
+<title>Argus Report, {_esc(s.get('name', result.target))}</title>
 <style>{_CSS}</style>
 </head>
 <body>

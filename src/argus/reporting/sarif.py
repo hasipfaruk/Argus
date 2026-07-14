@@ -119,4 +119,4 @@ class SARIFReporter(Reporter):
             parts.append(f"Attack: {f.attacker_perspective}")
         if f.remediation:
             parts.append(f"Fix: {f.remediation.summary}")
-        return " — ".join(parts)
+        return ", ".join(parts)

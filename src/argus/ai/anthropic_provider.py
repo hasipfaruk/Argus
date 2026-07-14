@@ -2,7 +2,7 @@
 
 Uses the official ``anthropic`` SDK if installed and ``ANTHROPIC_API_KEY`` is set.
 Import of the SDK is deferred to :meth:`complete` so the module loads even when
-the optional dependency is absent — availability is reported by ``is_available``.
+the optional dependency is absent, availability is reported by ``is_available``.
 """
 
 from __future__ import annotations

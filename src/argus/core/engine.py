@@ -2,20 +2,28 @@
 
 Pipeline:
 
-1. **Analyze** — build the project model (languages, frameworks, architecture).
-2. **Scan** — run every applicable scanner, collecting findings.
-3. **Enrich** — run agents over each finding (reasoning, attack simulation,
+1. **Analyze**, build the project model (languages, frameworks, architecture).
+2. **Scan**, run every applicable scanner, collecting findings.
+3. **Enrich**, run agents over each finding (reasoning, attack simulation,
    patch generation) according to config.
-4. **Assemble** — filter by severity, sort, and package into a ``ScanResult``.
+4. **Assemble**, filter by severity, sort, and package into a ``ScanResult``.
 
-The engine is deliberately synchronous and side-effect free apart from reading
-the target: it returns a ``ScanResult`` and writes nothing. Reporting and PR
-creation are separate steps.
+The engine returns a ``ScanResult`` and never modifies the target; its only
+write is to Argus's own cache directory (disable with ``--no-cache``).
+Reporting and PR creation are separate steps.
+
+Performance: scanners run concurrently (they are independent by design), and
+file-local scanners cache findings per file content hash so warm scans only
+re-analyze changed files. Both are on by default and both preserve Argus's
+determinism guarantee, findings, ids, and ordering are identical with or
+without cache and parallelism.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -66,21 +74,47 @@ class ScanEngine:
             + ("" if ai.is_remote else " (local / offline)")
         )
 
-        # 2. Scan
+        # 2. Scan. Scanners are independent, so they run concurrently; results
+        # are merged in selection order to keep output deterministic. File-local
+        # scanners consult the per-file cache so unchanged files skip re-analysis.
         scanners = self._select_scanners(project)
         result.scanners_run = [s.name for s in scanners]
         scan_ctx = ScannerContext(project=project, config=self.config, ai=ai)
-        for scanner in scanners:
-            self._progress(f"Running scanner: {scanner.name}")
-            try:
-                for finding in scanner.scan(scan_ctx):
-                    result.add(finding)
-            except Exception as exc:  # a broken scanner must not sink the scan
-                result.errors.append(f"scanner '{scanner.name}' failed: {exc}")
+        cache = self._open_cache(project)
+        project.files()  # materialize the file walk once before threads share it
 
-        # 3. De-duplicate across scanners, filter, then enrich. Filtering first
-        # means agents (and any paid model calls they make) only run on findings we
-        # will actually report.
+        def run_one(scanner: Scanner) -> tuple[list[Finding], str | None]:
+            try:
+                if cache is not None and scanner.cacheable(scan_ctx):
+                    return self._scan_cached(scanner, scan_ctx, cache), None
+                findings = list(scanner.scan(scan_ctx))
+                # Renumber file-local scanners the same way the cached path does,
+                # so finding ids are identical whether or not the cache is used.
+                if scanner.file_local:
+                    findings = self._renumber(scanner.name, findings)
+                return findings, None
+            except Exception as exc:  # a broken scanner must not sink the scan
+                return [], f"scanner '{scanner.name}' failed: {exc}"
+
+        for s in scanners:
+            self._progress(f"Running scanner: {s.name}")
+        if self.config.parallel and len(scanners) > 1:
+            with ThreadPoolExecutor(max_workers=min(len(scanners), 8)) as pool:
+                outcomes = list(pool.map(run_one, scanners))
+        else:
+            outcomes = [run_one(s) for s in scanners]
+        for findings, error in outcomes:
+            for finding in findings:
+                result.add(finding)
+            if error:
+                result.errors.append(error)
+        if cache is not None:
+            cache.save()
+
+        # 3. Prefer AST over regex where the AST tier is authoritative, de-duplicate
+        # across scanners, filter, then enrich. Filtering first means agents (and any
+        # paid model calls they make) only run on findings we will actually report.
+        result.findings = self._prefer_ast(result.findings, result.scanners_run)
         result.findings = self._dedupe(result.findings)
         result.findings = self._filter(result.findings)
         if self.config.ai.enabled:
@@ -94,6 +128,81 @@ class ScanEngine:
             f"highest severity {result.highest_severity().label}."
         )
         return result
+
+    # --- caching --------------------------------------------------------------
+    def _open_cache(self, project: Project):
+        """Open the per-project scan cache, or None when caching is off.
+
+        Remote targets are cloned to a fresh temp dir every run, so a cache
+        keyed on that path could never hit, skip it rather than litter the
+        cache directory.
+        """
+        if not self.config.cache or project.origin != "local":
+            return None
+        from argus.core.cache import ScanCache
+        try:
+            return ScanCache(project.root, __version__)
+        except Exception:  # cache trouble must never break a scan
+            return None
+
+    def _scan_cached(self, scanner: Scanner, ctx: ScannerContext,
+                     cache) -> list[Finding]:
+        """Run a file-local scanner, reusing cached findings for unchanged files.
+
+        Unchanged files (matched by content hash) contribute their cached
+        findings; only changed/new files are re-scanned, via a filtered view of
+        the project. Zero-finding files are cached too, that is most files.
+        """
+        from argus.core.cache import file_key, scanner_key
+
+        skey = scanner_key(scanner.name, self.config.options_for(scanner.name))
+        files = ctx.project.files()
+        keys = {f.rel_path: file_key(f.rel_path, f.text()) for f in files}
+
+        hits: list[Finding] = []
+        misses = []
+        for f in files:
+            cached = cache.lookup(skey, keys[f.rel_path])
+            if cached is None:
+                misses.append(f)
+            else:
+                hits.extend(cached)
+
+        fresh: list[Finding] = []
+        if misses:
+            import copy
+            subset = copy.copy(ctx.project)
+            subset._files_cache = tuple(misses)
+            sub_ctx = ScannerContext(project=subset, config=ctx.config, ai=ctx.ai)
+            fresh = list(scanner.scan(sub_ctx))
+            by_file: dict[str, list[Finding]] = {f.rel_path: [] for f in misses}
+            for finding in fresh:
+                by_file.setdefault(finding.location.path, []).append(finding)
+            for f in misses:
+                cache.store(skey, keys[f.rel_path], by_file.get(f.rel_path, []))
+        cache.prune(skey, set(keys.values()))
+        return self._renumber(scanner.name, hits + fresh)
+
+    @staticmethod
+    def _renumber(scanner_name: str, findings: list[Finding]) -> list[Finding]:
+        """Re-assign per-scan counters in ``scanner:rule:N`` ids after a cache merge.
+
+        Scanners allocate those counters in (file, line) order during a full
+        scan; sorting the merged cached+fresh findings the same way and
+        renumbering makes ids match what an uncached scan produces, keeping
+        ids unique and reports reproducible. Ids keyed by path/line (taint and
+        AST findings) are already stable and pass through untouched.
+        """
+        findings.sort(key=lambda f: (f.location.path, f.location.start_line or 0,
+                                     f.rule_id, f.id))
+        pattern = re.compile(rf"^{re.escape(scanner_name)}:([^:]+):(\d+)$")
+        counter = 0
+        for f in findings:
+            m = pattern.match(f.id)
+            if m:
+                counter += 1
+                f.id = f"{scanner_name}:{m.group(1)}:{counter}"
+        return findings
 
     # --- steps --------------------------------------------------------------
     def _select_scanners(self, project: Project) -> list[Scanner]:
@@ -140,6 +249,35 @@ class ScanEngine:
     def _filter(self, findings: list[Finding]) -> list[Finding]:
         return [f for f in findings if f.severity >= self.config.min_severity]
 
+    # Vulnerability classes the AST taint tiers analyze authoritatively. Where an
+    # AST scanner ran over a file, the regex tier's guesses for these classes are
+    # redundant (the AST tier already confirmed or cleared them with data flow), so
+    # they are dropped to avoid false positives like flagging a sanitized innerHTML.
+    _AST_OWNED_CWE = {"CWE-89", "CWE-79", "CWE-78", "CWE-22", "CWE-95"}
+    _AST_LANG_EXT = {
+        "ast-python": (".py",),
+        "ast-js": (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"),
+    }
+
+    @classmethod
+    def _prefer_ast(cls, findings: list[Finding], scanners_run: list[str]) -> list[Finding]:
+        covered_ext = tuple(
+            ext for name, exts in cls._AST_LANG_EXT.items() if name in scanners_run
+            for ext in exts
+        )
+        if not covered_ext:
+            return findings
+        out: list[Finding] = []
+        for f in findings:
+            redundant = (
+                f.scanner == "patterns"
+                and any(c in cls._AST_OWNED_CWE for c in f.cwe)
+                and f.location.path.endswith(covered_ext)
+            )
+            if not redundant:
+                out.append(f)
+        return out
+
     # Two different tiers reporting the same weakness within this many lines are
     # treated as one (e.g. the regex tier flags an unsafe query where it is built,
     # the AST tier flags it where it is executed a line later).
@@ -150,7 +288,7 @@ class ScanEngine:
         """Collapse the same weakness reported by more than one scanner.
 
         When the regex ``patterns`` tier and the AST ``ast-python`` tier both catch
-        one injection — often a line or two apart (construction vs. execution) —
+        one injection, often a line or two apart (construction vs. execution),
         keep the higher-confidence (then higher-severity) finding so the report is
         not doubled. Only merges findings from *different* scanners with the same
         CWE in the same file within a small line window, so distinct issues and

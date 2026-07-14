@@ -2,9 +2,9 @@
 
 Argus is plugin-based end to end. The three extension points are:
 
-* :class:`Scanner`   — analyzes a project and yields findings.
-* :class:`Reporter`  — serializes a scan result to some format.
-* :class:`AIProvider`— talks to a language model (defined in :mod:`argus.ai.base`).
+* :class:`Scanner` analyzes a project and yields findings.
+* :class:`Reporter` serializes a scan result to some format.
+* :class:`AIProvider` talks to a language model (defined in :mod:`argus.ai.base`).
 
 Plugins register themselves against a process-global :class:`Registry`. Built-in
 plugins register on import; third-party packages register through the
@@ -51,10 +51,26 @@ class Scanner(abc.ABC):
     category: ClassVar[str] = "general"
     #: One-line description shown in `argus scanners`.
     description: ClassVar[str] = ""
+    #: True if every finding depends only on the content of a single file.
+    #: File-local scanners get per-file result caching: between runs, unchanged
+    #: files reuse their cached findings and only changed files are re-analyzed.
+    #: Leave False for anything cross-file (dependency resolution, future
+    #: cross-file taint), a wrong True here silently serves stale findings.
+    file_local: ClassVar[bool] = False
 
     def applies_to(self, project: Project) -> bool:  # noqa: D401
         """Return True if this scanner is relevant to the project. Default: yes."""
         return True
+
+    def cacheable(self, ctx: ScannerContext) -> bool:
+        """Whether findings may be served from the per-file cache for this run.
+
+        Defaults to :attr:`file_local`. A scanner overrides this to opt out when
+        a run's options make results time-dependent rather than a pure function
+        of file content, e.g. live secret verification, which must re-check the
+        credential every run.
+        """
+        return self.file_local
 
     @abc.abstractmethod
     def scan(self, ctx: ScannerContext) -> Iterable[Finding]:

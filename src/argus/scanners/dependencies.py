@@ -3,23 +3,23 @@
 Parses dependency manifests **and lock files** for the common ecosystems, then
 matches declared versions against live OSV data (falling back to a bundled
 advisory seed, ``data/advisories.json``). Lock files matter because they pin the
-full *transitive* dependency tree with exact versions — which is where most real
-dependency risk lives — whereas top-level manifests only list direct deps and
+full *transitive* dependency tree with exact versions, which is where most real
+dependency risk lives, whereas top-level manifests only list direct deps and
 often use loose ranges.
 
 Supported inputs:
 
-* PyPI      — ``requirements.txt`` (``==`` pins), ``poetry.lock``, ``Pipfile.lock``.
-* npm       — ``package.json`` (direct), ``package-lock.json``, ``yarn.lock``.
-* Go        — ``go.mod``.
-* crates.io — ``Cargo.lock``.
-* RubyGems  — ``Gemfile.lock``.
-* Packagist — ``composer.lock``.
+* PyPI: ``requirements.txt`` (``==`` pins), ``poetry.lock``, ``Pipfile.lock``.
+* npm: ``package.json`` (direct), ``package-lock.json``, ``yarn.lock``.
+* Go: ``go.mod``.
+* crates.io: ``Cargo.lock``.
+* RubyGems: ``Gemfile.lock``.
+* Packagist: ``composer.lock``.
 
 New ecosystems match against live OSV data (the bundled seed only covers
 PyPI/npm), so they require network access to surface findings.
 
-Version comparison is intentionally lightweight — enough to evaluate the simple
+Version comparison is intentionally lightweight, enough to evaluate the simple
 ``<x.y.z`` ranges the seed data uses, without pulling in a full SemVer engine.
 """
 
@@ -120,7 +120,7 @@ def _parse_package_json(text: str) -> dict[str, str]:
 
 
 def _parse_package_lock(text: str) -> dict[str, str]:
-    """npm ``package-lock.json`` — full transitive tree (lockfileVersion 1/2/3)."""
+    """npm ``package-lock.json``, full transitive tree (lockfileVersion 1/2/3)."""
     deps: dict[str, str] = {}
     data = _loads(text)
     if not isinstance(data, dict):
@@ -153,7 +153,7 @@ def _parse_package_lock(text: str) -> dict[str, str]:
 
 
 def _parse_yarn_lock(text: str) -> dict[str, str]:
-    """yarn.lock (classic v1 and berry) — resolved versions per package."""
+    """yarn.lock (classic v1 and berry), resolved versions per package."""
     deps: dict[str, str] = {}
     names: list[str] = []
     for raw in text.splitlines():
@@ -177,7 +177,7 @@ def _parse_yarn_lock(text: str) -> dict[str, str]:
 
 
 def _parse_toml_packages(text: str) -> dict[str, str]:
-    """TOML lock files with ``[[package]]`` entries — poetry.lock and Cargo.lock."""
+    """TOML lock files with ``[[package]]`` entries, poetry.lock and Cargo.lock."""
     deps: dict[str, str] = {}
     current: str | None = None
     for raw in text.splitlines():
@@ -201,7 +201,7 @@ _parse_poetry_lock = _parse_toml_packages
 
 
 def _parse_go_mod(text: str) -> dict[str, str]:
-    """go.mod — module requirements (both block and single-line ``require``)."""
+    """go.mod, module requirements (both block and single-line ``require``)."""
     deps: dict[str, str] = {}
     in_block = False
     for raw in text.splitlines():
@@ -225,7 +225,7 @@ def _parse_go_mod(text: str) -> dict[str, str]:
 
 
 def _parse_gemfile_lock(text: str) -> dict[str, str]:
-    """Gemfile.lock — resolved gem specs (4-space indented ``name (version)``)."""
+    """Gemfile.lock, resolved gem specs (4-space indented ``name (version)``)."""
     deps: dict[str, str] = {}
     for raw in text.splitlines():
         m = re.match(r"^ {4}([A-Za-z0-9_.\-]+) \(([0-9][^)]*)\)\s*$", raw)
@@ -235,7 +235,7 @@ def _parse_gemfile_lock(text: str) -> dict[str, str]:
 
 
 def _parse_composer_lock(text: str) -> dict[str, str]:
-    """composer.lock — Packagist packages (runtime and dev)."""
+    """composer.lock, Packagist packages (runtime and dev)."""
     deps: dict[str, str] = {}
     data = _loads(text)
     if not isinstance(data, dict):
@@ -252,7 +252,7 @@ def _parse_composer_lock(text: str) -> dict[str, str]:
 
 
 def _parse_pipfile_lock(text: str) -> dict[str, str]:
-    """Pipfile.lock — default and develop dependency sections."""
+    """Pipfile.lock, default and develop dependency sections."""
     deps: dict[str, str] = {}
     data = _loads(text)
     if not isinstance(data, dict):
@@ -289,7 +289,7 @@ def _dedupe_by_cve(advisories: list[dict]) -> list[dict]:
     """Collapse advisories that describe the same CVE, keeping the most severe.
 
     OSV often returns several records (e.g. a GHSA and a PYSEC entry) aliasing one
-    CVE. Reporting them once — at the highest assessed severity — keeps the output
+    CVE. Reporting them once, at the highest assessed severity, keeps the output
     clean. Advisories without a CVE are keyed by their own id and never merged.
     """
     best: dict[str, dict] = {}
@@ -321,6 +321,22 @@ def _osv_to_dict(adv, ecosystem: str) -> dict:
     }
 
 
+def _annotate_reachability(finding: Finding, pkg: str, py_imports: set[str]) -> None:
+    """Attach an import-level reachability verdict to a PyPI dependency finding.
+
+    Annotates only, findings are never suppressed by reachability. A package
+    that is never imported keeps its severity but drops to an unlikely
+    likelihood, so triage naturally sorts confirmed-imported advisories first.
+    """
+    from argus.analysis import reachability
+
+    verdict = reachability.python_import_verdict(pkg, py_imports)
+    finding.metadata["reachability"] = verdict
+    finding.description = f"{finding.description}\n\n{reachability.describe(verdict)}"
+    if verdict == reachability.NOT_IMPORTED:
+        finding.likelihood = Likelihood.UNLIKELY
+
+
 @scanner
 class DependencyScanner(Scanner):
     name = "dependencies"
@@ -335,7 +351,15 @@ class DependencyScanner(Scanner):
         online = bool(opts.get("online", True))
         timeout = float(opts.get("timeout", 15.0))
         use_cache = bool(opts.get("cache", True))
+        use_reachability = bool(opts.get("reachability", False))
         counter = 0
+
+        # Experimental import-level reachability (Python only for now): computed
+        # once per scan, used to annotate PyPI findings as imported/not-imported.
+        py_imports: set[str] | None = None
+        if use_reachability:
+            from argus.analysis import reachability
+            py_imports = reachability.collect_python_imports(ctx.project)
 
         # Collect declared dependencies per ecosystem, de-duplicating by
         # (package, version) so a dependency listed in both a manifest and a lock
@@ -360,7 +384,10 @@ class DependencyScanner(Scanner):
                     advisories = self._bundled_matches(ecosystem, pkg, version)
                 for adv in _dedupe_by_cve(advisories):
                     counter += 1
-                    yield self._finding(adv, counter, path, pkg, version)
+                    finding = self._finding(adv, counter, path, pkg, version)
+                    if py_imports is not None and ecosystem == "PyPI":
+                        _annotate_reachability(finding, pkg, py_imports)
+                    yield finding
 
     def _resolve_source(self, ecosystem, entries, online, timeout, use_cache=True):
         """Return (osv_map, source). Prefer live OSV; fall back to the bundled seed."""
@@ -372,7 +399,7 @@ class DependencyScanner(Scanner):
             return osv.query(ecosystem, deps, timeout=timeout, use_cache=use_cache), "osv"
         except osv.OSVError as exc:
             # Offline/timeout/API problem: fall back to the bundled seed, but say so
-            # — a silent fallback in a security tool hides reduced coverage.
+            #, a silent fallback in a security tool hides reduced coverage.
             log.warning(
                 "OSV lookup for %s failed (%s); falling back to the bundled advisory "
                 "seed, which covers far fewer packages. Findings may be incomplete.",

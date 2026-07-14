@@ -69,10 +69,10 @@ dominated by the worst finding rather than averaged.
 
 Two registration paths feed the same global `Registry`:
 
-1. **In-process** — importing a scanner/reporter/provider module runs its
+1. **In-process**, importing a scanner/reporter/provider module runs its
    `@scanner`/`@reporter`/`@ai_provider` decorator, registering the class. The
    built-ins use this via `argus.plugins.register_builtins`.
-2. **Entry points** — third-party packages declare a callable under the
+2. **Entry points**, third-party packages declare a callable under the
    `argus.plugins` entry-point group in their `pyproject.toml`. The registry
    loads these lazily on first lookup. A failure in one plugin is isolated and
    never aborts discovery of the others.
@@ -83,7 +83,7 @@ See [plugins.md](plugins.md) for how to write one.
 
 Agents talk to models through the `AIProvider` interface. The default provider is
 `heuristic`: it requires no key and no network and fills findings from templates
-keyed on CWE. This keeps a base scan fully offline and deterministic — important
+keyed on CWE. This keeps a base scan fully offline and deterministic, important
 for tests and air-gapped environments. Cloud (`anthropic`, `openai`) and local
 (`ollama`) providers are drop-in alternatives. If a requested provider is
 unavailable, the factory falls back to `heuristic` with a warning rather than

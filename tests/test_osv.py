@@ -1,6 +1,6 @@
 """Tests for the hardened OSV client: batching, caching, and retry.
 
-All tests use an injected httpx.MockTransport — they never touch the real
+All tests use an injected httpx.MockTransport, they never touch the real
 network. The `osv_network` marker opts each out of the global offline fixture.
 """
 

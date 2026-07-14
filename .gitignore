@@ -22,12 +22,20 @@ coverage.xml
 argus-report.*
 *.sarif
 
+# Benchmarks: cloned corpora are throwaway; results/ IS tracked (published numbers)
+benchmarks/.corpora/
+
+# Internal working documents (strategy, launch drafts) — never publish
+docs/internal/
+docs/*.docx
+
 # Environment / secrets
 .env
 .env.*
 !.env.example
 
-# Editors / OS
+# Editors / OS / local tooling state
+.claude/
 .idea/
 .vscode/
 .DS_Store

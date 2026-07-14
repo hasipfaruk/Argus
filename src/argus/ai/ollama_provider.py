@@ -1,4 +1,4 @@
-"""Ollama provider — local models over HTTP.
+"""Ollama provider, local models over HTTP.
 
 Keeps source code inside your own environment: no SDK, no API key, just a running
 Ollama server (default ``http://localhost:11434``). Uses ``httpx`` directly so it

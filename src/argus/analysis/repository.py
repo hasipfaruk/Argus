@@ -4,7 +4,7 @@ The analyzer performs a single pass over the project to determine:
 
 * languages in use (by file count),
 * frameworks and libraries (from manifests and import/usage signals),
-* architectural facts — APIs, auth, datastores, third-party services, cloud,
+* architectural facts, APIs, auth, datastores, third-party services, cloud,
   containers, CI/CD, and dependency manifests.
 
 The result is attached to the :class:`~argus.core.project.Project` so downstream
