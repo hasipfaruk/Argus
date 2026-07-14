@@ -6,7 +6,7 @@ covers thousands of advisories across many ecosystems.
 
 Design goals (this is security-critical plumbing, so correctness beats cleverness):
 
-* **No silent gaps.** Every declared package is queried — requests are *batched*
+* **No silent gaps.** Every declared package is queried, requests are *batched*
   in chunks rather than truncated. A hard ceiling exists only as a runaway guard,
   and exceeding it is logged, never silent. A dropped dependency in a security
   scan reads as "you're covered" when you are not.
@@ -15,7 +15,7 @@ Design goals (this is security-critical plumbing, so correctness beats clevernes
 * **Fast on repeat scans.** Fetched advisory records are cached on disk (keyed by
   a hash of the vulnerability id, with a TTL), so re-scanning a large lock file
   does not re-hit the network and stays polite to the public API.
-* **Private.** Only package **names and versions** are sent to OSV — never source.
+* **Private.** Only package **names and versions** are sent to OSV, never source.
 
 When OSV is unreachable, :func:`query` raises :class:`OSVError` so the dependency
 scanner can fall back to the bundled seed.
@@ -151,7 +151,7 @@ def query(ecosystem: str, deps: dict[str, str], *, timeout: float = 15.0,
     """Return advisories per (package, version) for the given ecosystem.
 
     Raises OSVError on any network/HTTP problem so the caller can fall back to the
-    offline seed. Never raises for "no vulnerabilities" — that is an empty result.
+    offline seed. Never raises for "no vulnerabilities", that is an empty result.
     """
     items = list(deps.items())
     if not items:

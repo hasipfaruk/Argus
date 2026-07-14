@@ -2,7 +2,7 @@
 
 The patch agent proposes fixes against a stored *snippet* (which is stripped and
 truncated). To actually change a file we must operate on its real content, so the
-applier re-reads each file and rewrites the exact offending line — preserving
+applier re-reads each file and rewrites the exact offending line, preserving
 indentation and trailing content automatically, because the rewrite runs on the
 real line.
 
@@ -138,7 +138,7 @@ def apply_fixes(
         syntax_error = _syntax_error(rel_path, new_text)
         if syntax_error is not None:
             report.skipped.append(
-                f"{rel_path}: fix reverted — would introduce a syntax error "
+                f"{rel_path}: fix reverted, would introduce a syntax error "
                 f"({syntax_error})")
             continue
 

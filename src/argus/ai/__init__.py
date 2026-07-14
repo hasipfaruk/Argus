@@ -3,9 +3,9 @@
 Argus supports multiple model backends behind one interface so organizations can
 choose where their code goes:
 
-* ``heuristic`` — no network, no keys; template-based enrichment. The default.
-* ``anthropic`` / ``openai`` — cloud-hosted models.
-* ``ollama`` — local models, keeping source inside your own environment.
+* ``heuristic``, no network, no keys; template-based enrichment. The default.
+* ``anthropic`` / ``openai``, cloud-hosted models.
+* ``ollama``, local models, keeping source inside your own environment.
 
 Providers are plugins like everything else and register on import.
 """

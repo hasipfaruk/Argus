@@ -1,7 +1,7 @@
 # Writing plugins
 
-Argus has three extension points — **scanners**, **reporters**, and **AI
-providers** — and adding any of them requires no change to the core. This guide
+Argus has three extension points, **scanners**, **reporters**, and **AI
+providers**, and adding any of them requires no change to the core. This guide
 walks through each.
 
 ## Scanners
@@ -54,11 +54,11 @@ class TodoScanner(Scanner):
 
 `ScannerContext` carries:
 
-- `ctx.project` — the analyzed `Project` (languages, frameworks, architecture, and
+- `ctx.project`, the analyzed `Project` (languages, frameworks, architecture, and
   `files()` for iteration).
-- `ctx.config` — the active `Config`. Read per-scanner options with
+- `ctx.config`, the active `Config`. Read per-scanner options with
   `ctx.config.options_for(self.name)`.
-- `ctx.ai` — the selected `AIProvider`, if a scanner wants to use a model directly
+- `ctx.ai`, the selected `AIProvider`, if a scanner wants to use a model directly
   (most don't; enrichment is the agents' job).
 
 ### Good scanner behavior
@@ -121,8 +121,37 @@ class MyProvider(AIProvider):
         ...
 ```
 
-Set `is_remote` honestly — the `argus providers` command surfaces it so users can
+Set `is_remote` honestly, the `argus providers` command surfaces it so users can
 choose a local provider when source confidentiality matters.
+
+## Community rules (YAML, no Python)
+
+The `patterns` scanner is rule-driven, and you can extend it with a **YAML file**,
+no code, which is the easiest way to contribute a check. Argus loads rules
+from any path in `scanner_options.patterns.rules` (a string or list, globs
+allowed) and from the convention directory `.argus/rules/*.yml` in your project.
+
+```yaml
+# .argus/rules/team.yml
+rules:
+  - id: hardcoded-internal-ip
+    title: Hardcoded internal IP address
+    pattern: '\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'
+    severity: low            # info | low | medium | high | critical
+    languages: [Python, Go]  # optional; omit for all languages
+    cwe: [CWE-1188]          # optional
+    owasp: ["A05:2021-Security Misconfiguration"]   # optional
+    confidence: low          # optional: low | medium | high
+    why: An internal IP is baked into source.
+    fix: Move host addresses into configuration.
+    suppress: 'argus:allow-internal-ip'   # optional: a regex that clears a match
+```
+
+Findings from a custom rule are reported as `patterns.<id>`. A malformed rule is
+skipped with a warning rather than aborting the scan. A ready-to-copy example
+lives in [`examples/custom-rules/`](../examples/custom-rules/). This is the
+recommended path for language- or org-specific rules; reach for a Python scanner
+plugin (below) only when a rule needs logic a regex can't express.
 
 ## Packaging a plugin
 
@@ -143,4 +172,4 @@ def register() -> None:
 ```
 
 Once the package is installed alongside Argus, its plugins are discovered
-automatically — no configuration required.
+automatically, no configuration required.

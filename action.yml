@@ -1,0 +1,146 @@
+# Official Argus GitHub Action.
+#
+# Minimal usage (in your repo's .github/workflows/security.yml):
+#
+#   permissions:
+#     contents: read
+#     security-events: write   # for the SARIF upload
+#   steps:
+#     - uses: actions/checkout@v4
+#       with:
+#         fetch-depth: 0       # full history enables diff-aware PR scanning
+#     - uses: hasipfaruk/Argus@v0.7.0
+#       with:
+#         fail-on: high
+#
+# On pull requests the action is diff-aware by default: it scans the base branch
+# to build a baseline, then reports and gates only on findings the PR introduces.
+name: "Argus Security Scan"
+description: >-
+  AI-enriched application security scanning: hardcoded secrets, vulnerable
+  dependencies (live OSV data, transitive via lockfiles), SAST, taint analysis,
+  and IaC misconfigurations, with explanations, SARIF upload to GitHub Code
+  Scanning, and diff-aware pull-request gating. Offline by default: no API key
+  needed and code never leaves the runner.
+author: "Haseeb Farooq"
+
+branding:
+  icon: "eye"
+  color: "purple"
+
+inputs:
+  path:
+    description: "Path to scan, relative to the workspace."
+    required: false
+    default: "."
+  fail-on:
+    description: >-
+      Fail the step if any finding is at/above this severity
+      (critical | high | medium | low). Empty = never fail the build.
+    required: false
+    default: ""
+  scanners:
+    description: "Comma-separated scanners to run (default: all). See `argus scanners`."
+    required: false
+    default: ""
+  exclude-scanners:
+    description: "Comma-separated scanners to skip."
+    required: false
+    default: ""
+  min-severity:
+    description: "Only report findings at/above this severity."
+    required: false
+    default: ""
+  config:
+    description: "Path to an .argus.yml config file."
+    required: false
+    default: ""
+  sarif-file:
+    description: "Where to write the SARIF report."
+    required: false
+    default: "argus.sarif"
+  upload-sarif:
+    description: >-
+      Upload the SARIF report to GitHub Code Scanning (needs
+      `security-events: write` permission). Set to "false" to skip.
+    required: false
+    default: "true"
+  category:
+    description: "Code Scanning category for the SARIF upload."
+    required: false
+    default: "argus"
+  diff-aware:
+    description: >-
+      On pull requests, scan the base branch first and report only findings the
+      PR introduces. Requires a checkout with enough history (fetch-depth: 0).
+    required: false
+    default: "true"
+  argus-version:
+    description: "argus-appsec version to install (default: latest from PyPI)."
+    required: false
+    default: ""
+  python-version:
+    description: "Python version used to run Argus."
+    required: false
+    default: "3.12"
+  extra-args:
+    description: "Extra arguments appended verbatim to `argus scan`."
+    required: false
+    default: ""
+
+outputs:
+  sarif-file:
+    description: "Path of the SARIF report that was produced."
+    value: ${{ inputs.sarif-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Argus
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.argus-version }}" ]; then
+          pip install --quiet "argus-appsec==${{ inputs.argus-version }}"
+        else
+          pip install --quiet argus-appsec
+        fi
+
+    - name: Build baseline from base branch (diff-aware PRs)
+      if: github.event_name == 'pull_request' && inputs.diff-aware == 'true'
+      shell: bash
+      run: |
+        # Never break the build over the baseline: a missing base ref just means
+        # a full (non-diff-aware) scan.
+        git fetch origin "${GITHUB_BASE_REF}" --depth=1 2>/dev/null || true
+        if git worktree add "${RUNNER_TEMP}/argus-base" "origin/${GITHUB_BASE_REF}" 2>/dev/null; then
+          argus scan "${RUNNER_TEMP}/argus-base" -f json \
+            -o "${RUNNER_TEMP}/argus-baseline.json" --quiet || true
+        else
+          echo "::notice::Argus: could not check out base branch '${GITHUB_BASE_REF}';" \
+               "running a full scan instead of a diff-aware one." \
+               "Use actions/checkout with fetch-depth: 0 to enable diff-aware scanning."
+        fi
+
+    - name: Run Argus
+      shell: bash
+      run: |
+        args=(scan "${{ inputs.path }}" -f sarif -o "${{ inputs.sarif-file }}" --quiet)
+        [ -n "${{ inputs.scanners }}" ]         && args+=(--scanners "${{ inputs.scanners }}")
+        [ -n "${{ inputs.exclude-scanners }}" ] && args+=(--exclude "${{ inputs.exclude-scanners }}")
+        [ -n "${{ inputs.min-severity }}" ]     && args+=(--min-severity "${{ inputs.min-severity }}")
+        [ -n "${{ inputs.config }}" ]           && args+=(--config "${{ inputs.config }}")
+        [ -n "${{ inputs.fail-on }}" ]          && args+=(--fail-on "${{ inputs.fail-on }}")
+        [ -f "${RUNNER_TEMP}/argus-baseline.json" ] && args+=(--baseline "${RUNNER_TEMP}/argus-baseline.json")
+        # shellcheck disable=SC2086 -- extra-args is intentionally word-split
+        argus "${args[@]}" ${{ inputs.extra-args }}
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: always() && inputs.upload-sarif == 'true'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: ${{ inputs.category }}

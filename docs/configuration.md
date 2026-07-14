@@ -35,6 +35,13 @@ attack_simulation: false
 # Generate fix patches (and verify the deterministic ones).
 generate_patches: false
 
+# Reuse cached findings for unchanged files (content-hash keyed; file-local
+# scanners only). CLI: --no-cache. See docs/performance.md.
+cache: true
+
+# Run scanners concurrently. Reports are deterministic either way.
+parallel: true
+
 ai:
   # heuristic (offline, default) | anthropic | openai | ollama (local)
   provider: heuristic
@@ -52,14 +59,39 @@ scanner_options:
     online: true              # query the OSV database for real, current CVEs
     timeout: 15               # seconds for OSV lookups
     cache: true               # cache OSV records on disk to speed repeat scans
+    reachability: false       # experimental: imported/not-imported verdicts (Python)
+  secrets:
+    verify: false             # opt-in live check of detected secrets (CLI: --verify-secrets)
 ```
+
+## Secret verification (opt-in)
+
+`--verify-secrets` (or `scanner_options.secrets.verify: true`) makes a **single,
+read-only** call per detected secret to confirm whether it is actually live,
+GitHub, Stripe, Slack, OpenAI, and Google keys are supported; others report as
+unverified. A confirmed-live credential is escalated to Critical; a rejected one
+is downgraded. This makes authenticated network requests with the candidate
+credential, so it is **off by default, restricted to local targets** (never a
+cloned remote repo), and deliberately absent from the shipped CI templates. The
+secret value is used only for the request, it is never written to a finding,
+the cache, or a report.
+
+## Runtime posture checks (`--live-target`)
+
+`--live-target <url>` runs a safe, read-only posture pass against a deployed URL
+alongside the static scan (or scan a URL directly with `argus scan <url>`): it
+checks security headers, cookie flags, HTTP-vs-HTTPS transport, version
+disclosure, and a short allowlist of exposed sensitive paths. It is
+non-intrusive, only GETs, no payloads or exploitation, but still: **only point
+it at systems you are authorized to assess.** It is a pre-DAST layer, not a
+crawler or fuzzer.
 
 ## Dependency scanning and OSV
 
 The dependency scanner checks your declared packages against the public
 [OSV database](https://osv.dev), which covers thousands of advisories across
-ecosystems. Only **package names and versions** are sent to OSV — never your
-source code — so this preserves Argus's offline-first stance. Set
+ecosystems. Only **package names and versions** are sent to OSV, never your
+source code, so this preserves Argus's offline-first stance. Set
 `scanner_options.dependencies.online: false` to use only the small bundled seed
 (fully offline); Argus also falls back to the seed automatically if OSV is
 unreachable.
@@ -69,24 +101,40 @@ transient failures, and cached on disk so repeat scans are fast. The cache lives
 under `~/.cache/argus/osv` by default; override it with the `ARGUS_CACHE_DIR`
 environment variable, or disable it with `scanner_options.dependencies.cache: false`.
 
+### Reachability (experimental)
+
+Most dependency alerts concern packages your code never even imports. With
+`--reachability` (or `scanner_options.dependencies.reachability: true`), Argus
+annotates each PyPI dependency finding with an **import-level verdict**:
+*imported* (first-party code imports the package, treat as actionable) or
+*not imported* (no import found, deprioritized to an unlikely likelihood, but
+**never suppressed**, since dynamic imports and framework hooks are not traced).
+The verdict appears in the finding description and as `reachability` in finding
+metadata in JSON/SARIF reports. Python only for now; symbol-level and
+call-graph tiers are on the roadmap.
+
 ## Code scanning: two tiers
 
 Argus scans source code with two complementary scanners:
 
-- **`patterns`** (always on) — a fast, regex-based pass with a lightweight
+- **`patterns`** (always on), a fast, regex-based pass with a lightweight
   single-hop taint check. Broad language coverage, catches the common cases.
-- **`ast-python`** (optional) — a tree-sitter data-flow analyzer for Python that
-  tracks tainted values through *multiple* variable hops, so it catches injection
-  the regex tier misses (e.g. `x = request.args.get(...)` → `y = x` →
-  `execute(y)`). Enable it with:
+- **`ast-python`** and **`ast-js`** (optional), tree-sitter data-flow analyzers
+  for **Python** and **JavaScript/TypeScript** that track tainted values through
+  *multiple* variable hops, so they catch injection the regex tier misses
+  (e.g. `x = req.query.id` → `y = x` → `db.query('... ' + y)`). They also avoid
+  the regex tier's common false positives: a **parameterized query**
+  (`db.query('... WHERE id = ?', [id])`) and **sanitized** values
+  (`DOMPurify.sanitize(...)`, `Number(...)`, `secure_filename(...)`) are treated
+  as safe. Enable with:
 
   ```bash
   pip install "argus-appsec[ast]"
   ```
 
-  Without the extra, `ast-python` reports as not-applicable and Argus uses the
-  regex tier — nothing breaks. When both run, findings for the same weakness are
-  de-duplicated (the higher-confidence AST finding wins), so you never see one
+  Without the extra, the AST scanners report as not-applicable and Argus uses the
+  regex tier, nothing breaks. When both tiers run, findings for the same weakness
+  are de-duplicated (the higher-confidence AST finding wins), so you never see one
   issue reported twice.
 
 ## Common recipes

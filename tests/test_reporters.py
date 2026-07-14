@@ -63,3 +63,18 @@ def test_csv_has_header_and_rows(vulnerable_project):
     lines = csv_text.strip().splitlines()
     assert lines[0].startswith("id,scanner,rule_id")
     assert len(lines) > 1
+
+
+def test_gitlab_sast_report_shape(vulnerable_project):
+    result = _result(vulnerable_project)
+    doc = json.loads(registry.get_reporter("gitlab")().render(result))
+    assert doc["version"].startswith("15.")
+    assert doc["scan"]["type"] == "sast"
+    assert doc["scan"]["scanner"]["id"] == "argus"
+    assert doc["vulnerabilities"]
+    for v in doc["vulnerabilities"]:
+        assert v["severity"] in {"Info", "Low", "Medium", "High", "Critical"}
+        assert v["category"] == "sast"
+        assert v["location"]["file"]
+        # Every vulnerability must carry at least one identifier (GitLab requires it).
+        assert v["identifiers"]

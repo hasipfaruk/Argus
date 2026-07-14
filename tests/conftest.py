@@ -14,6 +14,18 @@ register_builtins()
 
 
 @pytest.fixture(autouse=True)
+def _isolated_scan_cache(tmp_path_factory, monkeypatch):
+    """Point the scan/OSV caches at a per-session temp dir.
+
+    Keeps test runs from reading stale entries out of (or littering) the real
+    ~/.cache/argus. Cache behavior itself is exercised in test_cache.py.
+    """
+    monkeypatch.setenv(
+        "ARGUS_CACHE_DIR", str(tmp_path_factory.mktemp("argus-cache"))
+    )
+
+
+@pytest.fixture(autouse=True)
 def _offline_osv(request, monkeypatch):
     """Keep the whole suite offline and deterministic.
 

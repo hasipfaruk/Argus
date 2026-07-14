@@ -1,6 +1,6 @@
 # Publish Argus to PyPI when a GitHub Release is published.
 #
-# Uses PyPI Trusted Publishing (OIDC) — no API token or secret is stored in the
+# Uses PyPI Trusted Publishing (OIDC), no API token or secret is stored in the
 # repo. You configure the trust relationship once on PyPI (see RELEASING.md).
 name: Publish to PyPI
 

@@ -18,7 +18,7 @@ Argus reads source code and, optionally, sends code to a configured AI provider.
 Relevant considerations:
 
 - The default `heuristic` provider and the `ollama` provider keep source on your
-  machine. The `anthropic` and `openai` providers send code to those services —
+  machine. The `anthropic` and `openai` providers send code to those services,
   choose a provider appropriate to your confidentiality requirements
   (`argus providers` shows which are local vs. remote).
 - Attack Simulation Mode is descriptive and non-executing: it does not run

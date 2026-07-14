@@ -1,7 +1,7 @@
 # Contributing to Argus
 
 Thanks for considering a contribution. Argus is designed so that most
-additions — new scanners, languages, compliance rules, report formats — land as
+additions, new scanners, languages, compliance rules, report formats, land as
 plugins and never touch the core. That keeps the barrier low and the core stable.
 
 ## Getting set up
@@ -37,7 +37,7 @@ first.
 ## Standards
 
 - **Tests are required** for new behavior. Put fixtures in `tests/conftest.py` and
-  keep tests deterministic — the default offline provider makes this easy.
+  keep tests deterministic, the default offline provider makes this easy.
 - **Every finding must carry a CWE and OWASP mapping** and, ideally, the reasoning
   fields so it is useful without a model.
 - **Keep the core dependency-light.** New heavy dependencies belong behind an

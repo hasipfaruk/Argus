@@ -55,7 +55,7 @@ class MarkdownReporter(Reporter):
     def render(self, result: ScanResult) -> str:
         out: list[str] = []
         summary = result.project_summary
-        out.append(f"# Argus Security Report — {summary.get('name', result.target)}")
+        out.append(f"# Argus Security Report, {summary.get('name', result.target)}")
         out.append("")
         out.append(self._overview(result))
         out.append("")

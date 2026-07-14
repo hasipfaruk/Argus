@@ -1,7 +1,7 @@
 """Baseline / diff-aware scanning support.
 
 A *baseline* is a previously written Argus JSON report. Comparing the current
-scan against it lets CI report and gate on **only new findings** — the single
+scan against it lets CI report and gate on **only new findings**, the single
 most important feature for adopting a scanner on an existing codebase without
 drowning in pre-existing debt.
 

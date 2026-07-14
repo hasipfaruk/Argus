@@ -3,7 +3,7 @@
 # Copy this into your own repository's .github/workflows/ to get Argus findings
 # as annotations on pull requests and in the Security tab. On pull requests the
 # scan is *diff-aware*: it first scans the base branch to build a baseline, then
-# reports only findings that are new in the PR — so you are never blocked by
+# reports only findings that are new in the PR, so you are never blocked by
 # pre-existing issues, only by ones the PR introduces.
 name: Argus Security Scan
 
@@ -30,9 +30,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install Argus
-        # This repo installs Argus from its own source. In your own project,
-        # replace this with `pip install argus-appsec` once Argus is on PyPI.
-        run: pip install .
+        # Install with the [ast] extra so the self-scan runs the full taint tier
+        # (the AST analysis clears regex false positives). In your own project,
+        # replace this with `pip install "argus-appsec[ast]"` once on PyPI.
+        run: pip install ".[ast]"
 
       # On a pull request, scan the base branch first to establish a baseline of
       # pre-existing findings. Uses a separate worktree so the PR checkout is
@@ -73,7 +74,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install .
+      - run: pip install ".[ast]"
       - name: Build baseline from base branch
         run: |
           git worktree add /tmp/base "origin/${{ github.base_ref }}"

@@ -1,8 +1,8 @@
 # Fixing findings and opening pull requests
 
 `argus fix` turns Argus from an advisor into a fixer. It scans a repository,
-applies the fixes it can verify locally to a new branch, commits them, and — on
-request — pushes the branch and opens a pull request.
+applies the fixes it can verify locally to a new branch, commits them, and, on
+request, pushes the branch and opens a pull request.
 
 ```bash
 argus fix ./my-app --dry-run      # preview only; writes nothing

@@ -2,13 +2,13 @@
 
 Commands:
 
-* ``argus scan TARGET``  — run a full scan and write reports.
-* ``argus fix TARGET``   — apply verified fixes on a branch and open a pull request.
-* ``argus scanners``     — list available scanners.
-* ``argus reporters``    — list available report formats.
-* ``argus providers``    — list AI providers and their availability.
-* ``argus init``         — write a starter ``.argus.yml``.
-* ``argus version``      — print the version.
+* ``argus scan TARGET``: run a full scan and write reports.
+* ``argus fix TARGET``: apply verified fixes on a branch and open a pull request.
+* ``argus scanners``: list available scanners.
+* ``argus reporters``: list available report formats.
+* ``argus providers``: list AI providers and their availability.
+* ``argus init``: write a starter ``.argus.yml``.
+* ``argus version``: print the version.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ register_builtins()
 
 app = typer.Typer(
     name="argus",
-    help="Argus — an open-source AI Security Engineer.",
+    help="Argus, an open-source AI Security Engineer.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -62,7 +62,7 @@ def _root(
         callback=_version_callback, is_eager=True,
     ),
 ) -> None:
-    """Argus — an open-source AI Security Engineer.
+    """Argus, an open-source AI Security Engineer.
 
     Point Argus at a codebase and it finds vulnerabilities, explains them, and can
     fix them. Run `argus COMMAND --help` for details on any command, e.g.
@@ -86,7 +86,8 @@ def scan(
     ),
     fmt: list[str] = typer.Option(
         ["table"], "--format", "-f",
-        help="Output format(s): table, json, sarif, markdown, html, csv. Repeatable.",
+        help="Output format(s): table, json, sarif, gitlab, markdown, html, csv. "
+             "Repeatable.",
     ),
     output: Path | None = typer.Option(
         None, "--output", "-o",
@@ -102,6 +103,25 @@ def scan(
     ),
     patches: bool = typer.Option(
         False, "--patches", help="Generate (and where possible verify) fix patches."
+    ),
+    reachability: bool = typer.Option(
+        False, "--reachability",
+        help="Experimental: annotate dependency findings with an import-level "
+             "reachability verdict (Python only for now). Findings for packages "
+             "never imported by first-party code are marked and deprioritized, "
+             "not suppressed.",
+    ),
+    no_cache: bool = typer.Option(
+        False, "--no-cache",
+        help="Re-analyze every file instead of reusing cached findings for "
+             "unchanged files.",
+    ),
+    verify_secrets: bool = typer.Option(
+        False, "--verify-secrets",
+        help="Opt-in: make read-only calls to confirm detected secrets are LIVE "
+             "(GitHub, Stripe, Slack, OpenAI, Google). Local targets only; makes "
+             "network requests with the candidate credential. Off by default and "
+             "never in CI templates.",
     ),
     min_severity: str | None = typer.Option(
         None, "--min-severity", help="Report findings at/above this severity."
@@ -121,6 +141,12 @@ def scan(
         help="Load .argus.yml from a cloned remote repo (off by default; a scanned "
              "repo is untrusted and could suppress its own findings).",
     ),
+    live_target: str | None = typer.Option(
+        None, "--live-target",
+        help="Also run safe, read-only runtime posture checks against this URL "
+             "(security headers, cookie flags, TLS, exposed paths). Non-intrusive; "
+             "only assess systems you are authorized to test.",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output."),
 ) -> None:
     """Scan a target and report findings."""
@@ -134,18 +160,36 @@ def scan(
         err_console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(2) from exc
 
+    # A URL target runs the posture layer directly (no source to analyze).
     if resolved.web is not None:
-        err_console.print(Panel(
-            "Dynamic scanning of deployed URLs (DAST) is on the roadmap but not "
-            "available yet.\n"
-            "Point Argus at source code — a local path or a git URL — for the full "
-            "static analysis pipeline.",
-            title="Web target", border_style="yellow",
-        ))
-        raise typer.Exit(0)
+        if not quiet:
+            err_console.print(
+                "[dim]· Running read-only posture checks (not full DAST). "
+                "Only assess systems you are authorized to test.[/dim]"
+            )
+        result = _posture_result(resolved.web.url, quiet=quiet)
+        if min_severity:
+            floor = Severity.parse(min_severity)
+            result.findings = [f for f in result.findings if f.severity >= floor]
+        _emit(result, fmt, output)
+        gated = fail_on is not None and result.highest_severity() >= \
+            Severity.parse(fail_on)
+        raise typer.Exit(1 if gated else 0)
 
     project = resolved.project
     assert project is not None
+
+    # Secret verification makes authenticated calls with the found credential.
+    # Doing that with secrets pulled from someone else's cloned repo is out of
+    # scope by design, restrict it to local targets.
+    if verify_secrets and project.origin != "local":
+        err_console.print(
+            "[red]Error:[/red] --verify-secrets is only allowed for local targets "
+            "(it would otherwise make authenticated calls with credentials from a "
+            "remote repository you do not control)."
+        )
+        resolved.cleanup()
+        raise typer.Exit(2)
 
     # Security: a cloned remote repository is untrusted. Do not honor a config file
     # discovered inside it (which could disable scanners or hide paths) unless the
@@ -164,12 +208,25 @@ def scan(
             scanners=scanners,
             exclude=exclude, ai_provider=ai_provider, ai_model=ai_model, no_ai=no_ai,
             attack_sim=attack_sim, patches=patches, min_severity=min_severity,
-            fail_on=fail_on,
+            fail_on=fail_on, reachability=reachability, no_cache=no_cache,
+            verify_secrets=verify_secrets,
         )
 
         progress = None if quiet else (lambda msg: err_console.print(f"[dim]· {escape(msg)}[/dim]"))
         engine = ScanEngine(cfg, progress=progress)
         result = engine.scan(project)
+
+        # Optional runtime posture layer alongside the static scan.
+        if live_target:
+            if not quiet:
+                err_console.print(
+                    f"[dim]· Posture checks against {escape(live_target)} "
+                    "(read-only; authorized use only)[/dim]"
+                )
+            from argus.dynamic import probe
+            for finding in probe(live_target):
+                result.add(finding)
+            result.findings = result.sorted_findings()
 
         if baseline is not None:
             _apply_baseline(result, baseline, quiet=quiet)
@@ -307,6 +364,27 @@ def providers() -> None:
 
 
 @app.command()
+def dashboard(
+    host: str = typer.Option("127.0.0.1", "--host", help="Address to bind."),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to listen on."),
+) -> None:
+    """Launch the web dashboard (scan history and trends).
+
+    Requires the dashboard extra: pip install "argus-appsec[dashboard]".
+    """
+    try:
+        from argus.dashboard.app import serve
+    except ImportError as exc:
+        err_console.print(
+            "[red]The dashboard needs extra dependencies.[/red] Install them with:\n"
+            '  pip install "argus-appsec[dashboard]"'
+        )
+        raise typer.Exit(1) from exc
+    console.print(f"Argus dashboard on [bold]http://{host}:{port}[/bold]  (Ctrl+C to stop)")
+    serve(host=host, port=port)
+
+
+@app.command()
 def init(
     path: Path = typer.Argument(Path(".argus.yml"), help="Where to write the config."),
 ) -> None:
@@ -325,6 +403,23 @@ def version() -> None:
 
 
 # --- helpers ---------------------------------------------------------------
+def _posture_result(url: str, *, quiet: bool) -> ScanResult:
+    """Build a ScanResult from live posture checks against a URL."""
+    from datetime import datetime, timezone
+
+    from argus.dynamic import probe
+
+    started = datetime.now(timezone.utc)
+    result = ScanResult(target=url, started_at=started, argus_version=__version__,
+                        scanners_run=["posture"])
+    for finding in probe(url):
+        result.add(finding)
+    result.findings = result.sorted_findings()
+    result.finished_at = datetime.now(timezone.utc)
+    result.project_summary = {"name": url, "origin": "url", "target": url}
+    return result
+
+
 def _apply_baseline(result: ScanResult, baseline: Path, *, quiet: bool) -> None:
     """Drop findings already present in a baseline report (diff-aware scanning)."""
     from argus.baseline import BaselineError, filter_new, load_fingerprints
@@ -343,8 +438,15 @@ def _apply_baseline(result: ScanResult, baseline: Path, *, quiet: bool) -> None:
 
 
 def _build_config(*, config, project_root, scanners, exclude, ai_provider, ai_model,
-                  no_ai, attack_sim, patches, min_severity, fail_on) -> Config:
+                  no_ai, attack_sim, patches, min_severity, fail_on,
+                  reachability=False, no_cache=False, verify_secrets=False) -> Config:
     cfg = Config.load(path=config, project_root=project_root)
+    if reachability:
+        cfg.scanner_options.setdefault("dependencies", {})["reachability"] = True
+    if no_cache:
+        cfg.cache = False
+    if verify_secrets:
+        cfg.scanner_options.setdefault("secrets", {})["verify"] = True
     if scanners:
         cfg.scanners = [s.strip() for s in scanners.split(",") if s.strip()]
     if exclude:
@@ -415,7 +517,7 @@ def _emit(result: ScanResult, formats: list[str], output: Path | None) -> None:
         rendered = cls().render(result)
         extension = cls().extension
         if output is None:
-            # Write raw to stdout — never through Rich, which would soft-wrap and
+            # Write raw to stdout, never through Rich, which would soft-wrap and
             # corrupt machine-readable formats (JSON/SARIF/CSV) when piped.
             sys.stdout.write(rendered)
             if not rendered.endswith("\n"):
