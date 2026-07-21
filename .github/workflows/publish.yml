@@ -45,7 +45,7 @@ jobs:
           /tmp/sbomenv/bin/cyclonedx-py environment -o sbom/argus-appsec.cdx.json
 
       - name: Attest build provenance for the distributions
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/*"
 
