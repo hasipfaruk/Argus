@@ -26,8 +26,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import time
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -145,15 +147,28 @@ def _request_with_retry(client: httpx.Client, method: str, url: str,
 
 
 # --- public API ------------------------------------------------------------
-def query(ecosystem: str, deps: dict[str, str], *, timeout: float = 15.0,
-          use_cache: bool = True,
+def query(ecosystem: str,
+          deps: Mapping[str, str] | Iterable[tuple[str, str]], *,
+          timeout: float = 15.0, use_cache: bool = True,
           client: httpx.Client | None = None) -> dict[tuple[str, str], list[OSVAdvisory]]:
     """Return advisories per (package, version) for the given ecosystem.
+
+    ``deps`` may be a ``{name: version}`` mapping (one version per package) or an
+    iterable of ``(name, version)`` pairs. The pair form is what lets a package
+    pinned at *two* versions in a lock tree be queried at both, rather than
+    collapsing to a single version and silently missing the other. Duplicate
+    pairs are de-duplicated while preserving order (so results stay deterministic).
 
     Raises OSVError on any network/HTTP problem so the caller can fall back to the
     offline seed. Never raises for "no vulnerabilities", that is an empty result.
     """
-    items = list(deps.items())
+    raw = deps.items() if isinstance(deps, Mapping) else deps
+    seen: set[tuple[str, str]] = set()
+    items: list[tuple[str, str]] = []
+    for pair in raw:
+        if pair not in seen:
+            seen.add(pair)
+            items.append(pair)
     if not items:
         return {}
     if len(items) > _MAX_PACKAGES:
@@ -265,10 +280,25 @@ def _severity_of(vuln: dict) -> Severity:
 
 
 def _cvss_band(vector_or_score: str) -> Severity | None:
-    """Map a CVSS base score to a band. Accepts a bare number if present."""
-    try:
-        value = float(vector_or_score)
-    except (TypeError, ValueError):
+    """Map a CVSS base score to a band.
+
+    Accepts either a bare number (``"9.8"``) or a full CVSS v3.x vector string
+    (``"CVSS:3.1/AV:N/AC:L/..."``). OSV/GHSA advisories usually carry the vector,
+    not the number, so parsing only bare floats silently defaulted every
+    vector-only advisory to MEDIUM -- under-rating real 9.8s that teams gate on.
+    """
+    if not isinstance(vector_or_score, str):
+        return None
+    text = vector_or_score.strip()
+    value: float | None = None
+    if text.upper().startswith("CVSS:3"):
+        value = _cvss3_base_score(text)
+    else:
+        try:
+            value = float(text)
+        except (TypeError, ValueError):
+            value = None
+    if value is None:
         return None
     if value >= 9.0:
         return Severity.CRITICAL
@@ -279,6 +309,56 @@ def _cvss_band(vector_or_score: str) -> Severity | None:
     if value > 0:
         return Severity.LOW
     return None
+
+
+# CVSS v3.1 metric weights (spec section 7). PR depends on Scope, handled below.
+_CVSS3_AV = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
+_CVSS3_AC = {"L": 0.77, "H": 0.44}
+_CVSS3_UI = {"N": 0.85, "R": 0.62}
+_CVSS3_CIA = {"H": 0.56, "L": 0.22, "N": 0.0}
+_CVSS3_PR_U = {"N": 0.85, "L": 0.62, "H": 0.27}   # scope unchanged
+_CVSS3_PR_C = {"N": 0.85, "L": 0.68, "H": 0.5}    # scope changed
+
+
+def _cvss3_roundup(value: float) -> float:
+    """Official CVSS v3.1 roundup: ceil to one decimal place, avoiding fp error."""
+    scaled = round(value * 100000)
+    if scaled % 10000 == 0:
+        return scaled / 100000.0
+    return (math.floor(scaled / 10000) + 1) / 10.0
+
+
+def _cvss3_base_score(vector: str) -> float | None:
+    """Compute a CVSS v3.x base score from a vector string, or None if malformed."""
+    metrics: dict[str, str] = {}
+    for part in vector.split("/")[1:]:  # skip the leading "CVSS:3.x"
+        key, _, val = part.partition(":")
+        if key and val:
+            metrics[key.upper()] = val.upper()
+    try:
+        scope_changed = metrics["S"] == "C"
+        pr_table = _CVSS3_PR_C if scope_changed else _CVSS3_PR_U
+        av = _CVSS3_AV[metrics["AV"]]
+        ac = _CVSS3_AC[metrics["AC"]]
+        pr = pr_table[metrics["PR"]]
+        ui = _CVSS3_UI[metrics["UI"]]
+        conf = _CVSS3_CIA[metrics["C"]]
+        integ = _CVSS3_CIA[metrics["I"]]
+        avail = _CVSS3_CIA[metrics["A"]]
+    except KeyError:
+        return None  # missing/invalid metric -> let the caller fall back
+
+    iss = 1 - (1 - conf) * (1 - integ) * (1 - avail)
+    impact = (
+        7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
+        if scope_changed
+        else 6.42 * iss
+    )
+    if impact <= 0:
+        return 0.0
+    exploitability = 8.22 * av * ac * pr * ui
+    raw = (impact + exploitability) * (1.08 if scope_changed else 1.0)
+    return _cvss3_roundup(min(raw, 10.0))
 
 
 def _fixed_version(vuln: dict) -> str | None:

@@ -1,0 +1,41 @@
+{
+  "domains": {
+    "iac": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "vulnerable_cases": 1,
+      "false_positives": 0
+    },
+    "llm": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "vulnerable_cases": 6,
+      "false_positives": 0
+    },
+    "sast": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "vulnerable_cases": 3,
+      "false_positives": 0
+    },
+    "secrets": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "vulnerable_cases": 1,
+      "false_positives": 0
+    },
+    "taint": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "vulnerable_cases": 1,
+      "false_positives": 0
+    }
+  },
+  "min_severity": "Low",
+  "overall": {
+    "recall": 1.0,
+    "precision": 1.0,
+    "vulnerable_cases": 12,
+    "false_positives": 0
+  }
+}

@@ -87,10 +87,10 @@ class SecretsScanner(Scanner):
 
     def cacheable(self, ctx: ScannerContext) -> bool:
         # Live verification makes network calls whose result depends on the
-        # credential's current state, not the file content, so a run that
-        # verifies must not be served from (or written to) the per-file cache.
-        verify = bool(ctx.config.options_for(self.name).get("verify"))
-        return self.file_local and not verify
+        # credential's current state, and history scanning is a repo-level pass,
+        # neither fits the per-file content cache, so skip caching for both.
+        opts = ctx.config.options_for(self.name)
+        return self.file_local and not opts.get("verify") and not opts.get("history")
 
     def scan(self, ctx: ScannerContext) -> Iterable[Finding]:
         opts = ctx.config.options_for(self.name)
@@ -140,6 +140,52 @@ class SecretsScanner(Scanner):
                             confidence=Confidence.LOW if is_example else Confidence.MEDIUM,
                             title=f"Possible hardcoded secret in '{am.group('key')}'",
                         )
+
+        if opts.get("history"):
+            yield from self._scan_history(ctx.project.root)
+
+    def _scan_history(self, root) -> Iterable[Finding]:
+        """Report secrets found anywhere in git history (including deleted ones)."""
+        from argus.scanners import secrets_history
+
+        secrets, truncated = secrets_history.find_history_secrets(root)
+        for i, hs in enumerate(secrets, start=1):
+            yield self._history_finding(hs, i, truncated)
+
+    def _history_finding(self, hs, index: int, truncated: bool) -> Finding:
+        note = (" (history scan was truncated at the size cap; some older commits "
+                "were not read)") if truncated else ""
+        return Finding(
+            id=f"{self.name}:history:{hs.rule}:{index}",
+            rule_id=f"{self.name}.history.{hs.rule}",
+            scanner=self.name,
+            title=f"Secret in git history: {hs.rule.replace('-', ' ')}",
+            description=(
+                f"A value matching the `{hs.rule}` pattern was committed in git "
+                f"history (introduced around commit {hs.commit or 'unknown'}). Even "
+                f"if it has been removed from the current files, it remains "
+                f"recoverable from history and must be treated as compromised.{note}"
+            ),
+            location=Location(path=hs.path or "(git history)", snippet=hs.redacted),
+            severity=Severity.HIGH,
+            confidence=Confidence.MEDIUM,
+            likelihood=Likelihood.LIKELY,
+            cwe=["CWE-798"],
+            owasp=["A07:2021-Identification and Authentication Failures"],
+            remediation=Remediation(
+                summary="Rotate the credential; deleting it from history is not enough.",
+                guidance=(
+                    "1. Rotate/revoke the credential now, assume it is compromised.\n"
+                    "2. Removing it from the latest commit does NOT remove it from "
+                    "history; anyone with the repo can recover it.\n"
+                    "3. If you must purge it, rewrite history (git-filter-repo) and "
+                    "force-push, then have collaborators re-clone.\n"
+                    "4. Add a pre-commit secret scan to prevent recurrence."
+                ),
+                references=["https://cwe.mitre.org/data/definitions/798.html"],
+            ),
+            tags=["secret", "history", hs.rule],
+        )
 
     def _make_finding(self, *, rule_id: str, index: int, path: str, lineno: int,
                       line: str, matched: str, severity: Severity,

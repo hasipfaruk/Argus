@@ -1,0 +1,41 @@
+# Prove the runtime dependencies install reproducibly from a hash-pinned lock.
+# A scanner with loose or unverifiable dependencies is one typosquat away from
+# being the supply-chain attack it warns about. requirements.lock pins every
+# transitive runtime dependency to an exact version and SHA256; this job installs
+# with --require-hashes so a tampered or substituted artifact fails the build.
+#
+# Regenerate the lock after changing runtime deps:
+#   pip install pip-tools
+#   pip-compile --generate-hashes --output-file=requirements.lock pyproject.toml
+name: Locked install
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "requirements.lock"
+      - "pyproject.toml"
+      - ".github/workflows/locked-install.yml"
+  pull_request:
+    paths:
+      - "requirements.lock"
+      - "pyproject.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Hash-verified install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # matches the interpreter the lock was compiled for
+      - name: Install pinned, hash-verified runtime dependencies
+        run: pip install --require-hashes -r requirements.lock
+      - name: Install Argus without re-resolving dependencies
+        run: pip install --no-deps .
+      - name: Smoke test
+        run: argus --version

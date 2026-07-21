@@ -12,7 +12,7 @@ and checks that the fix actually works.
 [![PyPI version](https://img.shields.io/pypi/v/argus-appsec?color=8b5cf6&label=pypi)](https://pypi.org/project/argus-appsec/)
 [![Python](https://img.shields.io/pypi/pyversions/argus-appsec?color=6ea8fe)](https://pypi.org/project/argus-appsec/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
-[![CI](https://github.com/hasipfaruk/Argus/actions/workflows/ci.yml/badge.svg)](https://github.com/hasipfaruk/Argus/actions/workflows/ci.yml)
+[![CI](https://github.com/Argus-CodeSecurity/Argus-appsec/actions/workflows/ci.yml/badge.svg)](https://github.com/Argus-CodeSecurity/Argus-appsec/actions/workflows/ci.yml)
 [![Self-scan](https://img.shields.io/badge/self--scan-clean-brightgreen)](.github/workflows/argus-scan.yml)
 [![OWASP LLM Top 10](https://img.shields.io/badge/OWASP-LLM%20Top%2010-111c33)](https://genai.owasp.org/llm-top-10/)
 
@@ -64,7 +64,7 @@ pip install "argus-appsec[dashboard]"
 From source, for development:
 
 ```bash
-git clone https://github.com/hasipfaruk/Argus
+git clone https://github.com/Argus-CodeSecurity/Argus-appsec
 cd Argus
 pip install -e ".[dev]"
 ```
@@ -115,13 +115,13 @@ permissions:
 steps:
   - uses: actions/checkout@v4
     with: { fetch-depth: 0 }
-  - uses: hasipfaruk/Argus@v0.7.0
+  - uses: Argus-CodeSecurity/Argus-appsec@v0.7.0
     with:
       fail-on: high
 ```
 
 You also get [pre-commit hooks](docs/ci-cd.md#pre-commit-hook) that block secrets
-before they enter git history, an official Docker image (`ghcr.io/hasipfaruk/argus`),
+before they enter git history, an official Docker image (`ghcr.io/argus-codesecurity/argus`),
 and GitLab CI and Bitbucket Pipelines snippets. See [docs/ci-cd.md](docs/ci-cd.md).
 
 ## How it works
@@ -243,6 +243,11 @@ via `.argus/rules/*.yml` or `scanner_options.patterns.rules`. See
 **Web dashboard.** Scan history and risk trends ship as an optional extra:
 `pip install "argus-appsec[dashboard]"` then `argus dashboard`. See
 [docs/dashboard.md](docs/dashboard.md).
+
+**Kubernetes.** The `iac` scanner checks Kubernetes manifests statically as part
+of a normal scan. Assessing a **live** cluster read-only (pod security, RBAC,
+network policies, exposed services) is a commercial add-on, `argus-k8s`, that
+plugs an `argus cluster` command into the CLI when licensed.
 
 **Distribution.** An official GitHub Action, pre-commit hooks, and a published Docker
 image. See [docs/ci-cd.md](docs/ci-cd.md).
