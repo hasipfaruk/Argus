@@ -3,7 +3,7 @@
 # be triggered manually for a one-off build.
 #
 # Usage once published:
-#   docker run --rm -v "$PWD:/work" ghcr.io/hasipfaruk/argus scan /work
+#   docker run --rm -v "$PWD:/work" ghcr.io/argus-codesecurity/argus scan /work
 name: Publish Docker image
 
 on:

@@ -56,7 +56,7 @@ class SARIFReporter(Reporter):
                     "tool": {
                         "driver": {
                             "name": "Argus",
-                            "informationUri": "https://github.com/hasipfaruk/Argus",
+                            "informationUri": "https://github.com/Argus-CodeSecurity/Argus-appsec",
                             "version": __version__,
                             "rules": list(rules.values()),
                         }
@@ -73,6 +73,7 @@ class SARIFReporter(Reporter):
             "name": f.rule_id.replace(".", "_"),
             "shortDescription": {"text": f.title},
             "fullDescription": {"text": f.why_vulnerable or f.description},
+            "helpUri": f.docs_url,
             "defaultConfiguration": {"level": _LEVEL[f.severity]},
             "properties": {
                 "security-severity": _SECURITY_SEVERITY[f.severity],

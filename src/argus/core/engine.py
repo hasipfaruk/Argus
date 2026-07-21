@@ -21,10 +21,11 @@ without cache and parallelism.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
 
 from argus import __version__
@@ -114,8 +115,14 @@ class ScanEngine:
         # 3. Prefer AST over regex where the AST tier is authoritative, de-duplicate
         # across scanners, filter, then enrich. Filtering first means agents (and any
         # paid model calls they make) only run on findings we will actually report.
+        result.findings = self._apply_inline_suppressions(result.findings, project)
+        result.findings = self._apply_allowlist(result.findings, self.config)
         result.findings = self._prefer_ast(result.findings, result.scanners_run)
         result.findings = self._dedupe(result.findings)
+        # Correlate the surviving findings into higher-impact attack chains, then
+        # apply the severity filter to findings and chains together.
+        from argus.analysis.attack_chains import find_chains
+        result.findings.extend(c.to_finding() for c in find_chains(result.findings))
         result.findings = self._filter(result.findings)
         if self.config.ai.enabled:
             self._run_agents(result, project, ai)
@@ -249,11 +256,120 @@ class ScanEngine:
     def _filter(self, findings: list[Finding]) -> list[Finding]:
         return [f for f in findings if f.severity >= self.config.min_severity]
 
-    # Vulnerability classes the AST taint tiers analyze authoritatively. Where an
-    # AST scanner ran over a file, the regex tier's guesses for these classes are
-    # redundant (the AST tier already confirmed or cleared them with data flow), so
+    # Inline suppression comment, e.g.
+    #   subprocess.run(cmd, shell=True)  # argus-ignore: python-shell-true reason="trusted"
+    # The `reason` is required (so suppressions are documented). The rule id is
+    # optional; without it every finding on the line is suppressed. An optional
+    # `until=YYYY-MM-DD` makes the suppression expire so accepted risk resurfaces.
+    # `#` and `//` comment styles are both accepted.
+    _INLINE_IGNORE = re.compile(
+        r"""(?:\#|//)\s*argus-ignore
+            (?::\s*(?P<rule>[A-Za-z0-9_.\-]+))?
+            [^\n]*?reason\s*=\s*['"](?P<reason>[^'"]+)['"]
+            (?:[^\n]*?until\s*=\s*(?P<until>\d{4}-\d{2}-\d{2}))?
+        """,
+        re.VERBOSE,
+    )
+
+    @staticmethod
+    def _rule_matches(rule_id: str, target: str) -> bool:
+        """A suppression rule id matches by full id, short id, or last segment."""
+        return (rule_id == target or rule_id.endswith("." + target)
+                or rule_id.split(".")[-1] == target)
+
+    @classmethod
+    def _apply_inline_suppressions(cls, findings: list[Finding],
+                                   project: Project) -> list[Finding]:
+        """Drop findings whose source line carries a matching argus-ignore comment."""
+        needed = {f.location.path for f in findings if f.location.start_line is not None}
+        lines_by_path: dict[str, list[str]] = {
+            fref.rel_path: fref.lines() for fref in project.files()
+            if fref.rel_path in needed
+        }
+        today = datetime.now(timezone.utc).date()
+        kept: list[Finding] = []
+        for finding in findings:
+            line_no = finding.location.start_line
+            lines = lines_by_path.get(finding.location.path)
+            if line_no is None or lines is None or not 1 <= line_no <= len(lines):
+                kept.append(finding)
+                continue
+            m = cls._INLINE_IGNORE.search(lines[line_no - 1])
+            if m is None:
+                kept.append(finding)
+                continue
+            until = m.group("until")
+            if until:
+                try:
+                    if date.fromisoformat(until) < today:
+                        kept.append(finding)  # suppression expired: resurface it
+                        continue
+                except ValueError:
+                    kept.append(finding)  # malformed date: do not suppress
+                    continue
+            rule = m.group("rule")
+            if rule and not cls._rule_matches(finding.rule_id, rule):
+                kept.append(finding)
+                continue
+            # otherwise: suppressed, drop it
+        return kept
+
+    @classmethod
+    def _apply_allowlist(cls, findings: list[Finding], config: Config) -> list[Finding]:
+        """Drop findings matched by a committed allowlist entry (config ``allow:``).
+
+        Each entry is {rule?, path?, reason (required), until? (YYYY-MM-DD)}. A
+        `reason` is required so acceptance is documented; an entry with neither a
+        rule nor a path is rejected (it would suppress everything); an expired
+        `until` no longer suppresses, so the finding resurfaces.
+        """
+        entries = getattr(config, "allow", None)
+        if not entries:
+            return findings
+        today = datetime.now(timezone.utc).date()
+        active: list[dict] = []
+        for e in entries:
+            if not e.get("reason") or (not e.get("rule") and not e.get("path")):
+                continue
+            until = e.get("until")
+            if until:
+                try:
+                    if date.fromisoformat(str(until)) < today:
+                        continue
+                except ValueError:
+                    continue
+            active.append(e)
+        if not active:
+            return findings
+        return [f for f in findings if not any(cls._allow_matches(f, e) for e in active)]
+
+    @classmethod
+    def _allow_matches(cls, finding: Finding, entry: dict) -> bool:
+        rule = entry.get("rule")
+        if rule and not cls._rule_matches(finding.rule_id, str(rule)):
+            return False
+        path = entry.get("path")
+        if path:
+            path = str(path)
+            p = finding.location.path or ""
+            name = p.rsplit("/", 1)[-1]
+            if not (fnmatch.fnmatch(p, path) or fnmatch.fnmatch(name, path)
+                    or (path.endswith("/**") and p.startswith(path[:-2]))):
+                return False
+        return True
+
+    # Vulnerability classes the AST taint tiers analyze authoritatively via data
+    # flow. Where an AST scanner ran over a file, the regex tier's guesses for these
+    # classes are redundant (the AST tier already confirmed or cleared them), so
     # they are dropped to avoid false positives like flagging a sanitized innerHTML.
-    _AST_OWNED_CWE = {"CWE-89", "CWE-79", "CWE-78", "CWE-22", "CWE-95"}
+    #
+    # Note: CWE-78 (command injection) is intentionally NOT here. The regex tier's
+    # command-injection rules flag taint-independent smells such as
+    # `subprocess(..., shell=True)` and `os.system(<dynamic>)`, which are dangerous
+    # regardless of whether a tracked taint source reaches them, so the AST tier's
+    # silence must not suppress them. Genuinely tainted cases where both tiers fire
+    # are still collapsed by _dedupe, so this does not double-report.
+    _AST_OWNED_CWE = {"CWE-89", "CWE-79", "CWE-22", "CWE-95"}
     _AST_LANG_EXT = {
         "ast-python": (".py",),
         "ast-js": (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"),

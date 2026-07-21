@@ -1,0 +1,77 @@
+"""Scan git history for secrets that were committed and later removed.
+
+The working-tree secrets scan misses the most dangerous real-world case: a
+credential that was committed, then deleted in a later commit. It is gone from the
+current files but still trivially recoverable from history, so the correct
+remediation is to *rotate* it, not just delete it.
+
+This walks the diffs across all of history (bounded, so a huge repo cannot hang a
+scan), runs the high-precision secret signatures on added lines, and reports each
+unique secret with the commit that introduced it. Only signature matches are used
+(not entropy) to keep history noise low. Every git call uses an argument array,
+never a shell.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from argus.remediation import git_ops
+
+# Bound the diff text we read so an enormous history cannot hang or OOM a scan.
+_MAX_OUTPUT_CHARS = 20_000_000  # ~20 MB of unified diff text
+_MAX_LINE = 1000  # skip minified/huge added lines, matching the working-tree scan
+
+
+@dataclass
+class HistorySecret:
+    rule: str
+    redacted: str
+    path: str
+    commit: str
+
+
+def find_history_secrets(root: Path) -> tuple[list[HistorySecret], bool]:
+    """Return (secrets, truncated). Empty list if not a git repo or git absent."""
+    from argus.scanners.secrets import _SIGNATURES, SecretsScanner
+
+    if not git_ops.is_git_repo(root):
+        return [], False
+    proc = git_ops._run(
+        root, "log", "-p", "-U0", "--all", "--no-color", "--no-textconv",
+        "--no-merges", check=False,
+    )
+    if proc.returncode != 0:
+        return [], False
+
+    text = proc.stdout
+    truncated = len(text) > _MAX_OUTPUT_CHARS
+    if truncated:
+        text = text[:_MAX_OUTPUT_CHARS]
+
+    seen: set[tuple[str, str]] = set()
+    found: list[HistorySecret] = []
+    commit = ""
+    path = ""
+    for line in text.splitlines():
+        if line.startswith("commit "):
+            commit = line[7:].strip()[:12]
+        elif line.startswith("+++ b/"):
+            path = line[6:].strip()
+        elif line.startswith("+") and not line.startswith("+++"):
+            added = line[1:]
+            if len(added) > _MAX_LINE:
+                continue
+            for rule, pattern in _SIGNATURES.items():
+                m = pattern.search(added)
+                if not m:
+                    continue
+                redacted = SecretsScanner._redact(m.group(0))
+                key = (rule, redacted)
+                if key not in seen:
+                    seen.add(key)
+                    found.append(HistorySecret(rule=rule, redacted=redacted,
+                                               path=path, commit=commit))
+                break  # one secret per line is enough
+    return found, truncated

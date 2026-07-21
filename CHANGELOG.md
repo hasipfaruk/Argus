@@ -5,6 +5,13 @@ All notable changes to Argus are documented here. The format follows
 to [Semantic Versioning](https://semver.org/) (pre-1.0: minor versions may
 include breaking changes, noted explicitly).
 
+## [Unreleased]
+
+### Added
+- **Plugin commands**: add-on packages can now contribute CLI subcommands via
+  the `argus.commands` entry-point group, so optional and commercial extensions
+  extend the CLI without the core depending on their code.
+
 ## [0.7.0], 2026-07-14
 
 The largest release so far: AI-era security coverage, deeper code analysis,
@@ -65,7 +72,7 @@ never released.
   pull requests.
 - **pre-commit hooks** (`.pre-commit-hooks.yaml`): `argus-secrets` (fast,
   secrets-only, made for every commit) and `argus` (full static scan).
-- **Official Docker image** published to `ghcr.io/hasipfaruk/argus`
+- **Official Docker image** published to `ghcr.io/argus-codesecurity/argus`
   (linux/amd64 + linux/arm64) on every release.
 - **Reachability analysis (experimental, `--reachability`)**: dependency
   findings for Python projects gain an *imported / not imported* verdict, so a

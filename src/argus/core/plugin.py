@@ -102,21 +102,45 @@ class Registry:
         self._loaded_entrypoints = False
 
     # --- registration -------------------------------------------------------
+    @staticmethod
+    def _reject_collision(kind: str, name: str, existing: type, cls: type) -> None:
+        """Refuse a different class claiming an already-registered plugin name.
+
+        Idempotent re-registration of the *same* class is allowed so importing
+        built-ins twice (or reloading a module) is harmless. A third-party
+        plugin silently replacing ``patterns`` / ``json`` / ``heuristic`` is not.
+        """
+        if existing is not cls:
+            raise ValueError(
+                f"{kind} name {name!r} is already registered by "
+                f"{existing.__module__}.{existing.__qualname__}; "
+                f"refusing {cls.__module__}.{cls.__qualname__}"
+            )
+
     def register_scanner(self, cls: type[Scanner]) -> type[Scanner]:
         if not cls.name:
             raise ValueError(f"Scanner {cls.__name__} must define a name")
+        existing = self._scanners.get(cls.name)
+        if existing is not None:
+            self._reject_collision("Scanner", cls.name, existing, cls)
         self._scanners[cls.name] = cls
         return cls
 
     def register_reporter(self, cls: type[Reporter]) -> type[Reporter]:
         if not cls.name:
             raise ValueError(f"Reporter {cls.__name__} must define a name")
+        existing = self._reporters.get(cls.name)
+        if existing is not None:
+            self._reject_collision("Reporter", cls.name, existing, cls)
         self._reporters[cls.name] = cls
         return cls
 
     def register_ai_provider(self, cls: type[AIProvider]) -> type[AIProvider]:
         if not cls.name:
             raise ValueError(f"AIProvider {cls.__name__} must define a name")
+        existing = self._ai_providers.get(cls.name)
+        if existing is not None:
+            self._reject_collision("AIProvider", cls.name, existing, cls)
         self._ai_providers[cls.name] = cls
         return cls
 

@@ -9,7 +9,7 @@
 #     - uses: actions/checkout@v4
 #       with:
 #         fetch-depth: 0       # full history enables diff-aware PR scanning
-#     - uses: hasipfaruk/Argus@v0.7.0
+#     - uses: Argus-CodeSecurity/Argus-appsec@v0.7.0
 #       with:
 #         fail-on: high
 #
@@ -75,6 +75,12 @@ inputs:
       PR introduces. Requires a checkout with enough history (fetch-depth: 0).
     required: false
     default: "true"
+  pr-comment:
+    description: >-
+      On pull requests, post the findings the PR introduces as an inline review
+      (the "PR bot"). Needs `pull-requests: write` permission. Off by default.
+    required: false
+    default: "false"
   argus-version:
     description: "argus-appsec version to install (default: latest from PyPI)."
     required: false
@@ -137,6 +143,22 @@ runs:
         [ -f "${RUNNER_TEMP}/argus-baseline.json" ] && args+=(--baseline "${RUNNER_TEMP}/argus-baseline.json")
         # shellcheck disable=SC2086 -- extra-args is intentionally word-split
         argus "${args[@]}" ${{ inputs.extra-args }}
+
+    - name: Comment findings on the pull request (PR bot)
+      if: github.event_name == 'pull_request' && inputs.pr-comment == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        # Post only the findings this PR introduces as an inline review. Never
+        # fail the build here; gating is the `fail-on` job's responsibility.
+        args=(review "${{ inputs.path }}" --quiet)
+        [ -n "${{ inputs.scanners }}" ]         && args+=(--scanners "${{ inputs.scanners }}")
+        [ -n "${{ inputs.exclude-scanners }}" ] && args+=(--exclude "${{ inputs.exclude-scanners }}")
+        [ -n "${{ inputs.min-severity }}" ]     && args+=(--min-severity "${{ inputs.min-severity }}")
+        [ -n "${{ inputs.config }}" ]           && args+=(--config "${{ inputs.config }}")
+        [ -f "${RUNNER_TEMP}/argus-baseline.json" ] && args+=(--baseline "${RUNNER_TEMP}/argus-baseline.json")
+        argus "${args[@]}" || echo "::warning::Argus PR review could not be posted."
 
     - name: Upload SARIF to GitHub Code Scanning
       if: always() && inputs.upload-sarif == 'true'

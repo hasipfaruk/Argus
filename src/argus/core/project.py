@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +39,11 @@ class FileRef:
 
     _text: str | None = field(default=None, repr=False, compare=False)
     _read_attempted: bool = field(default=False, repr=False, compare=False)
+    # Guards the lazy read: the engine shares one FileRef across parallel scanner
+    # threads, so text() must be atomic or a racing reader can observe an
+    # in-progress read as empty content (silently missed findings).
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     @property
     def name(self) -> str:
@@ -57,18 +63,30 @@ class FileRef:
         return b"\x00" in chunk
 
     def text(self) -> str:
-        """Return file contents as text, or "" if unreadable/binary. Cached."""
+        """Return file contents as text, or "" if unreadable/binary. Cached.
+
+        Thread-safe: parallel scanners share one FileRef, so the read happens
+        under a lock and ``_text`` is published before ``_read_attempted`` is
+        set. A reader that observes the flag is therefore guaranteed to see the
+        fully-read content, never an empty in-progress value.
+        """
         if self._read_attempted:
             return self._text or ""
-        self._read_attempted = True
-        if self.is_probably_binary():
-            self._text = ""
-            return ""
-        try:
-            self._text = self.path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            self._text = ""
-        return self._text or ""
+        with self._lock:
+            # Double-checked: another thread may have finished the read while we
+            # were waiting for the lock.
+            if self._read_attempted:
+                return self._text or ""
+            if self.is_probably_binary():
+                text = ""
+            else:
+                try:
+                    text = self.path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    text = ""
+            self._text = text          # publish content first...
+            self._read_attempted = True  # ...then the flag readers gate on.
+            return self._text or ""
 
     def lines(self) -> list[str]:
         return self.text().splitlines()
@@ -148,6 +166,18 @@ class Project:
                 rel = abs_path.relative_to(self.root).as_posix()
                 if self._excluded(rel):
                     continue
+                # Symlink escape guard: a hostile repository can point a symlink at
+                # a file outside the scan root (e.g. /etc/passwd or an SSH key) to
+                # get its contents read and then embedded in a shared report. Skip
+                # any symlink whose real target leaves the project root. In-repo
+                # symlinks are still allowed so legitimate layouts keep working.
+                if abs_path.is_symlink():
+                    try:
+                        real = abs_path.resolve()
+                    except OSError:
+                        continue
+                    if not real.is_relative_to(self.root):
+                        continue
                 try:
                     size = abs_path.stat().st_size
                 except OSError:

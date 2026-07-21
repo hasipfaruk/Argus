@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0     # full history enables diff-aware PR scanning
-      - uses: hasipfaruk/Argus@v0.7.0
+      - uses: Argus-CodeSecurity/Argus-appsec@v0.7.0
         with:
           fail-on: high      # block merges on newly introduced High+ findings
 ```
@@ -135,7 +135,7 @@ An official image is published to GHCR on every release, useful where `pip`
 is unavailable in CI or you want a pinned, reproducible scanner:
 
 ```bash
-docker run --rm -v "$PWD:/work" ghcr.io/hasipfaruk/argus scan /work --fail-on high
+docker run --rm -v "$PWD:/work" ghcr.io/argus-codesecurity/argus scan /work --fail-on high
 ```
 
 The image runs as a non-root user and includes git, so remote repository
@@ -149,7 +149,7 @@ catching a secret **before it enters git history** takes three lines:
 ```yaml
 # .pre-commit-config.yaml
 repos:
-  - repo: https://github.com/hasipfaruk/Argus
+  - repo: https://github.com/Argus-CodeSecurity/Argus-appsec
     rev: v0.7.0
     hooks:
       - id: argus-secrets        # fast, secrets-only, made for every commit

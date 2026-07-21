@@ -119,6 +119,67 @@ def _github_pr(ref: RepoRef, head: str, base: str, title: str, body: str,
     return PullRequest(url=data.get("html_url", ""), number=data.get("number"))
 
 
+def post_pr_review(ref: RepoRef, number: int, comments: list[dict], *,
+                   summary: str = "", token: str | None = None,
+                   timeout: float = 30.0) -> None:
+    """Post a PR review with inline comments (GitHub only). Raises HostingError.
+
+    Each comment is a dict with ``path``, ``line``, ``side``, and ``body``, as
+    produced by :func:`argus.remediation.annotations.build_fix_comments`.
+    """
+    if not comments:
+        return
+    if ref.host != "github":
+        raise HostingError(
+            f"Inline PR annotations are only supported on GitHub (got {ref.host}).")
+    token = token or token_for(ref.host)
+    if not token:
+        raise HostingError("No GITHUB_TOKEN found to post PR annotations.")
+    url = f"https://api.github.com/repos/{ref.owner}/{ref.repo}/pulls/{number}/reviews"
+    resp = httpx.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        json={"body": summary, "event": "COMMENT", "comments": comments},
+        timeout=timeout,
+    )
+    if resp.status_code >= 300:
+        raise HostingError(f"GitHub review API error {resp.status_code}: {resp.text[:300]}")
+
+
+def post_issue_comment(ref: RepoRef, number: int, body: str, *,
+                       token: str | None = None, timeout: float = 30.0) -> None:
+    """Post a normal (non-inline) comment on a PR/issue (GitHub only).
+
+    Used for the PR-review summary when a finding is not on a line the pull
+    request changed, so it cannot be attached inline but should still be shown.
+    """
+    if not body:
+        return
+    if ref.host != "github":
+        raise HostingError(
+            f"PR comments are only supported on GitHub (got {ref.host}).")
+    token = token or token_for(ref.host)
+    if not token:
+        raise HostingError("No GITHUB_TOKEN found to post a PR comment.")
+    url = f"https://api.github.com/repos/{ref.owner}/{ref.repo}/issues/{number}/comments"
+    resp = httpx.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        json={"body": body},
+        timeout=timeout,
+    )
+    if resp.status_code >= 300:
+        raise HostingError(f"GitHub comment API error {resp.status_code}: {resp.text[:300]}")
+
+
 def _gitlab_mr(ref: RepoRef, head: str, base: str, title: str, body: str,
                token: str, timeout: float) -> PullRequest:
     project = quote(ref.slug, safe="")

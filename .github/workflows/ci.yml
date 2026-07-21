@@ -10,12 +10,19 @@ permissions:
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }} · Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.10", "3.11", "3.12"]
+        # A large share of enterprise developers are on Windows; a scanner that
+        # breaks on path separators or symlink handling there is unusable. Cover
+        # it on the current Python without tripling the whole matrix.
+        include:
+          - os: windows-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +43,9 @@ jobs:
 
       - name: Test
         run: pytest -q --cov=argus --cov-report=term-missing
+
+      - name: Accuracy benchmark (labeled corpus; gates on any miss or false positive)
+        run: python benchmarks/accuracy.py
 
   build-image:
     name: Build Docker image

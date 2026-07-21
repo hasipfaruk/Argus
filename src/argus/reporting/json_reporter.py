@@ -34,6 +34,7 @@ class CSVReporter(Reporter):
     _COLUMNS = [
         "id", "scanner", "rule_id", "severity", "confidence", "likelihood",
         "risk_score", "title", "path", "line", "cwe", "owasp", "remediation",
+        "docs_url",
     ]
 
     def render(self, result: ScanResult) -> str:
@@ -55,5 +56,6 @@ class CSVReporter(Reporter):
                 "cwe": ";".join(f.cwe),
                 "owasp": ";".join(f.owasp),
                 "remediation": f.remediation.summary if f.remediation else "",
+                "docs_url": f.docs_url,
             })
         return buf.getvalue()

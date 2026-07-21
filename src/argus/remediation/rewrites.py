@@ -23,6 +23,12 @@ from collections.abc import Callable
 def _fix_yaml_load(ln: str) -> str | None:
     if "yaml.load(" not in ln or "Safe" in ln:
         return None
+    # `yaml.safe_load` takes no Loader= argument, so blindly rewriting
+    # `yaml.load(x, Loader=...)` would raise TypeError at runtime. Only the plain
+    # form is safely fixable on a single line; leave the Loader= form for a human
+    # (it falls through to "no deterministic fix").
+    if re.search(r"\bLoader\s*=", ln):
+        return None
     return ln.replace("yaml.load(", "yaml.safe_load(")
 
 
@@ -82,13 +88,30 @@ def _fix_trust_remote_code(ln: str) -> str | None:
 def _fix_torch_load(ln: str) -> str | None:
     """Add ``weights_only=True`` to a ``torch.load(...)`` call that lacks it.
 
-    Injects the keyword before the first closing paren of the call, which covers
-    the common single-line form. Skips lines that already pass weights_only.
+    Inserts the keyword before the *matching* close paren of the ``torch.load``
+    call, found by balancing parentheses. A naive ``[^)]*?`` regex would stop at
+    the first inner ``)`` and corrupt nested calls like
+    ``torch.load(f, map_location=torch.device("cpu"))``. If the call does not
+    close on this single line, we leave it alone rather than risk a broken write.
     """
     if "torch.load(" not in ln or "weights_only" in ln:
         return None
-    fixed = re.sub(r"(torch\.load\([^)]*?)\s*\)", r"\1, weights_only=True)", ln, count=1)
-    return fixed if fixed != ln else None
+    open_idx = ln.index("torch.load(") + len("torch.load(")
+    depth = 1
+    i = open_idx
+    while i < len(ln) and depth:
+        if ln[i] == "(":
+            depth += 1
+        elif ln[i] == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    if depth != 0:  # call does not close on this line; don't risk a broken rewrite
+        return None
+    if not ln[open_idx:i].strip():  # torch.load() with no argument: nothing to fix
+        return None
+    return f"{ln[:i].rstrip()}, weights_only=True{ln[i:]}"
 
 
 # rule_id -> function(line) -> fixed_line | None (None = no change / not applicable).
@@ -101,6 +124,39 @@ REWRITES: dict[str, Callable[[str], str | None]] = {
     "llm.trust-remote-code": _fix_trust_remote_code,
     "llm.torch-load-pickle": _fix_torch_load,
 }
+
+
+# Autonomy ladder (Rung 3): rule ids whose fix is safe to apply *automatically*
+# (unattended), because the rewrite is high-confidence, self-verifies, and its
+# only behavior change IS the security intent. Everything else stays propose-only
+# for human review. Auto fixes still land on a branch/PR, never a direct push, so
+# they are always trivially revertible. This starter set is deliberately tiny;
+# teams graduate more rules via `autofix.graduate` in config once they trust them.
+#
+# Deliberately NOT auto by default (they can change runtime behavior): weak-hash
+# (changes digests), shell=True->False (breaks string commands), tls-verify
+# (breaks self-signed), torch.load / trust_remote_code (can break model loading).
+AUTO_APPLY: frozenset[str] = frozenset({
+    "patterns.python-yaml-load",   # yaml.load -> safe_load: the recommended default
+    "patterns.flask-debug-true",   # debug=True -> False: never ship debug on
+})
+
+
+def auto_apply_rules(config: object | None = None) -> set[str]:
+    """Rule ids eligible for automatic application, honoring config graduate/demote.
+
+    Starts from the conservative built-in :data:`AUTO_APPLY`, then adds any
+    ``autofix.graduate`` rule ids and removes any ``autofix.demote`` ones from the
+    project config, so autonomy is opt-in and reversible per rule.
+    """
+    rules = set(AUTO_APPLY)
+    autofix = getattr(config, "autofix", None) or {}
+    if isinstance(autofix, dict):
+        for r in autofix.get("graduate") or []:
+            rules.add(str(r))
+        for r in autofix.get("demote") or []:
+            rules.discard(str(r))
+    return rules
 
 
 def has_rewrite(rule_id: str) -> bool:
@@ -118,29 +174,47 @@ def fix_line(rule_id: str, line: str) -> str | None:
         return None
 
 
-def detection_pattern(rule_id: str) -> re.Pattern[str] | None:
-    """The scanner regex that produced this rule, for self-verification.
+def _detection_rule(rule_id: str):
+    """The scanner rule that produced this finding, for self-verification.
 
     Searches both the ``patterns`` and ``llm`` rule sets (loaded lazily to avoid
-    an import cycle with the scanners package), so a rewrite for either scanner
-    can be verified by confirming the detection no longer fires.
+    an import cycle with the scanners package). Returns the rule object, which
+    carries both the detection ``pattern`` and any ``suppress`` idiom.
     """
     short = rule_id.split(".", 1)[-1]
     from argus.scanners.llm import RULES as LLM_RULES
     from argus.scanners.patterns import RULES as PATTERN_RULES
 
-    for pattern_rule in PATTERN_RULES:
-        if pattern_rule.id == short:
-            return pattern_rule.pattern
-    for llm_rule in LLM_RULES:
-        if llm_rule.id == short:
-            return llm_rule.pattern
+    # Separate loops (not a merged tuple) so each element keeps its concrete type
+    # (Rule / LLMRule); both expose .id/.pattern/.suppress.
+    for prule in PATTERN_RULES:
+        if prule.id == short:
+            return prule
+    for lrule in LLM_RULES:
+        if lrule.id == short:
+            return lrule
     return None
 
 
+def detection_pattern(rule_id: str) -> re.Pattern[str] | None:
+    """The scanner regex that produced this rule (kept for callers/tests)."""
+    rule = _detection_rule(rule_id)
+    return rule.pattern if rule is not None else None
+
+
 def verify_line_fixed(rule_id: str, fixed_line: str) -> bool:
-    """True if the original detection no longer matches the fixed line."""
-    pattern = detection_pattern(rule_id)
-    if pattern is None:
+    """True if the scanner would no longer flag the fixed line.
+
+    Honors the rule's ``suppress`` idiom as well as its ``pattern`` — the same
+    logic the scanners use — so a rewrite that adds a recognized safe form (e.g.
+    ``weights_only=True``) verifies even when the raw pattern still matches. This
+    is the local proxy for a fix "resolving" the finding; the applier separately
+    gates the whole file on still parsing before any fix is reported.
+    """
+    rule = _detection_rule(rule_id)
+    if rule is None:
         return False
-    return not pattern.search(fixed_line)
+    suppress = getattr(rule, "suppress", None)
+    if suppress is not None and suppress.search(fixed_line):
+        return True
+    return not rule.pattern.search(fixed_line)

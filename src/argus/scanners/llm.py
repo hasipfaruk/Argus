@@ -128,7 +128,11 @@ RULES: list[LLMRule] = [
     LLMRule(
         id="torch-load-pickle",
         title="torch.load without weights_only=True (pickle code execution)",
-        pattern=_rx(r"torch\.load\s*\((?![^)]*weights_only\s*=\s*True)[^)]*\)"),
+        # Fire on any torch.load( call and clear it via the suppress idiom when
+        # weights_only=True is present. A lookahead bounded by the first ) would
+        # miss nested calls like torch.load(f, map_location=torch.device("cpu")).
+        pattern=_rx(r"torch\.load\s*\("),
+        suppress=_rx(r"weights_only\s*=\s*True"),
         severity=Severity.HIGH, llm_category="LLM05:2025-Supply Chain",
         cwe=["CWE-502"], confidence=Confidence.MEDIUM, languages={"Python"},
         why="torch.load uses pickle by default, which executes arbitrary code while "

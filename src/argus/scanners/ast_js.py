@@ -88,10 +88,13 @@ _SOURCE_RE = re.compile(
     r"|\bwindow\.name\b"
     r"|\bprocess\.(argv|env)\b"
 )
-# Function-name last components that neutralize taint.
+# Function-name last components that neutralize taint. NB: toString() is *not*
+# a sanitizer -- `userInput.toString()` still yields attacker-controlled text and
+# does nothing against XSS/injection, so listing it here would clear taint that
+# is still live.
 _SANITIZERS = {
     "parseInt", "parseFloat", "Number", "encodeURIComponent", "encodeURI",
-    "escape", "sanitize", "escapeHtml", "sanitizeHtml", "quote", "toString",
+    "escape", "sanitize", "escapeHtml", "sanitizeHtml", "quote",
 }
 
 
@@ -153,7 +156,10 @@ CALL_SINKS: list[Sink] = [
     ),
     Sink(
         id="ast-code-injection",
-        fn=re.compile(r"(^|\.)?(eval|Function)$"),
+        # Prefix is required (not optional): eval/Function must be the whole name
+        # or a real member access (.eval). The old optional `(^|\.)?` also matched
+        # names merely ending in the word -- retrieval, myFunction, medieval.
+        fn=re.compile(r"(^|\.)(eval|Function)$"),
         cwe=["CWE-95"], owasp=["A03:2021-Injection"], severity=Severity.HIGH,
         title="Code injection (tainted value reaches eval/Function)",
         why="Untrusted input flows into eval or the Function constructor, which "

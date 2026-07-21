@@ -86,8 +86,8 @@ def scan(
     ),
     fmt: list[str] = typer.Option(
         ["table"], "--format", "-f",
-        help="Output format(s): table, json, sarif, gitlab, markdown, html, csv. "
-             "Repeatable.",
+        help="Output format(s): table, json, sarif, gitlab, markdown, html, csv, "
+             "badge, vex. Repeatable.",
     ),
     output: Path | None = typer.Option(
         None, "--output", "-o",
@@ -123,6 +123,16 @@ def scan(
              "network requests with the candidate credential. Off by default and "
              "never in CI templates.",
     ),
+    secrets_history: bool = typer.Option(
+        False, "--secrets-history",
+        help="Also scan git history for secrets in past commits (even if later "
+             "deleted). Needs a local git repository with full history.",
+    ),
+    track_secrets: Path | None = typer.Option(
+        None, "--track-secrets",
+        help="Path to a rotation-state file. With --verify-secrets, flags live "
+             "secrets that have gone unrotated across scans (found but not rotated).",
+    ),
     min_severity: str | None = typer.Option(
         None, "--min-severity", help="Report findings at/above this severity."
     ),
@@ -146,6 +156,11 @@ def scan(
         help="Also run safe, read-only runtime posture checks against this URL "
              "(security headers, cookie flags, TLS, exposed paths). Non-intrusive; "
              "only assess systems you are authorized to test.",
+    ),
+    audience: str | None = typer.Option(
+        None, "--audience",
+        help="Re-render the console output for a reader: dev, exec, or auditor "
+             "(only affects the default table output, not -f formats).",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output."),
 ) -> None:
@@ -209,8 +224,11 @@ def scan(
             exclude=exclude, ai_provider=ai_provider, ai_model=ai_model, no_ai=no_ai,
             attack_sim=attack_sim, patches=patches, min_severity=min_severity,
             fail_on=fail_on, reachability=reachability, no_cache=no_cache,
-            verify_secrets=verify_secrets,
+            verify_secrets=verify_secrets, secrets_history=secrets_history,
         )
+        # A cloned, untrusted repo must not inject scanner rules via its own
+        # in-repo .argus/rules directory; gate it on the same trust decision.
+        cfg.trust_project_config = trust_project_config
 
         progress = None if quiet else (lambda msg: err_console.print(f"[dim]· {escape(msg)}[/dim]"))
         engine = ScanEngine(cfg, progress=progress)
@@ -231,7 +249,11 @@ def scan(
         if baseline is not None:
             _apply_baseline(result, baseline, quiet=quiet)
 
-        _emit(result, fmt, output)
+        if track_secrets is not None:
+            from argus.scanners.secret_rotation import track_rotations
+            track_rotations(result.findings, track_secrets)
+
+        _emit(result, fmt, output, audience=audience)
 
         if engine.should_fail(result):
             err_console.print(
@@ -239,6 +261,11 @@ def scan(
                 f"{cfg.fail_on.label if cfg.fail_on else ''}."
             )
             raise typer.Exit(1)
+    except FileNotFoundError as exc:
+        # e.g. an explicit --config path that doesn't exist. Fail loudly with a
+        # clear message rather than silently scanning with default gating.
+        err_console.print(f"[red]Error:[/red] {escape(str(exc))}")
+        raise typer.Exit(2) from exc
     finally:
         resolved.cleanup()
 
@@ -252,11 +279,18 @@ def fix(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be fixed without writing anything."
     ),
-    branch: str = typer.Option(
-        "argus/security-fixes", "--branch", help="Name of the branch to create."
+    branch: str | None = typer.Option(
+        None, "--branch", help="Name of the branch to create "
+        "(default: argus/security-fixes, or argus/auto-fixes with --auto)."
     ),
     base: str | None = typer.Option(
         None, "--base", help="Base branch for the PR (default: repo's default branch)."
+    ),
+    auto: bool = typer.Option(
+        False, "--auto",
+        help="Autonomy Rung 3: apply only the curated auto-tier rules (safe, "
+             "reversible), for unattended use. Still lands on a revertible PR. "
+             "Graduate more rules via autofix.graduate in .argus.yml.",
     ),
     include_unverified: bool = typer.Option(
         False, "--include-unverified",
@@ -264,6 +298,11 @@ def fix(
     ),
     force_branch: bool = typer.Option(
         False, "--force-branch", help="Reuse/overwrite the branch if it already exists."
+    ),
+    annotate_pr: bool = typer.Option(
+        False, "--annotate-pr",
+        help="Post inline review comments on the opened PR explaining each fix "
+             "(GitHub only; implies --open-pr).",
     ),
     scanners_opt: str | None = typer.Option(
         None, "--scanners", "-s", help="Comma-separated scanners to run (default: all)."
@@ -298,6 +337,7 @@ def fix(
         cfg = Config.load(
             project_root=project.root if project.origin == "local" else None
         )
+        cfg.trust_project_config = project.origin == "local"
         # Fixing is deterministic; AI enrichment is not needed and slows things down.
         cfg.ai.enabled = False
         if scanners_opt:
@@ -308,13 +348,23 @@ def fix(
         progress = None if quiet else (lambda msg: err_console.print(f"[dim]· {escape(msg)}[/dim]"))
         result = ScanEngine(cfg, progress=progress).scan(project)
 
+        only_rules = None
+        if auto:
+            from argus.remediation.rewrites import auto_apply_rules
+            only_rules = auto_apply_rules(cfg)
+            if not quiet:
+                err_console.print(
+                    f"[dim]· Auto mode: {len(only_rules)} auto-tier rule(s) eligible "
+                    f"({', '.join(sorted(only_rules)) or 'none'}).[/dim]")
+        branch_name = branch or ("argus/auto-fixes" if auto else "argus/security-fixes")
+
         options = FixOptions(
-            branch=branch, base=base, open_pr=open_pr,
+            branch=branch_name, base=base, open_pr=open_pr or annotate_pr,
             include_unverified=include_unverified, dry_run=dry_run,
-            force_branch=force_branch,
+            force_branch=force_branch, annotate=annotate_pr, only_rules=only_rules,
         )
         outcome = run_fix_workflow(project, result.findings, options)
-        _print_fix_outcome(outcome, open_pr=open_pr, dry_run=dry_run)
+        _print_fix_outcome(outcome, open_pr=open_pr or annotate_pr, dry_run=dry_run)
 
         if outcome.error:
             raise typer.Exit(1)
@@ -344,6 +394,297 @@ def reporters() -> None:
     for name, cls in sorted(registry.reporters().items()):
         table.add_row(name, cls.extension, escape(cls.description))
     console.print(table)
+
+
+@app.command()
+def mcp() -> None:
+    """Run Argus as an MCP server (stdio) so AI coding agents can call it.
+
+    Speaks the Model Context Protocol over stdin/stdout and exposes an
+    ``argus_scan`` tool. Point an MCP-capable client at ``argus mcp``.
+    """
+    from argus.mcp.server import run_stdio
+
+    run_stdio()
+
+
+@app.command()
+def push(
+    target: str = typer.Argument(
+        ".", help="Local path, git URL, or website URL to scan and upload."
+    ),
+    report: Path | None = typer.Option(
+        None, "--report",
+        help="Upload an existing Argus JSON report instead of scanning "
+             "('-' reads it from stdin, e.g. `argus scan . -f json | argus push --report -`).",
+    ),
+    url: str | None = typer.Option(
+        None, "--url", help="Argus Cloud base URL (or set ARGUS_CLOUD_URL)."
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="Cloud API token (or set ARGUS_CLOUD_TOKEN)."
+    ),
+    scanners_opt: str | None = typer.Option(
+        None, "--scanners", "-s", help="Comma-separated scanners to run (default: all)."
+    ),
+    min_severity: str | None = typer.Option(
+        None, "--min-severity",
+        help="Only upload findings at/above this severity (default: low).",
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output."),
+) -> None:
+    """Scan a target (or read a report) and upload the result to Argus Cloud.
+
+    Sends only finding metadata (rule, severity, title, location, CWE), never
+    source or secret values, to the cloud's `/api/scans` ingest endpoint so the
+    scan shows up in your dashboard's history and trends.
+    """
+    import os
+
+    from argus.upload import PushError, build_ingest_payload, push_result
+
+    cloud_url = url or os.environ.get("ARGUS_CLOUD_URL")
+    cloud_token = token or os.environ.get("ARGUS_CLOUD_TOKEN")
+    if not cloud_url or not cloud_token:
+        err_console.print(
+            "[red]Error:[/red] provide the cloud URL and API token via --url/--token "
+            "or the ARGUS_CLOUD_URL/ARGUS_CLOUD_TOKEN environment variables."
+        )
+        raise typer.Exit(2)
+
+    floor = Severity.parse(min_severity) if min_severity else Severity.LOW
+
+    if report is not None:
+        raw = sys.stdin.read() if str(report) == "-" else report.read_text(encoding="utf-8")
+        try:
+            result = ScanResult.model_validate_json(raw)
+        except Exception as exc:
+            err_console.print(f"[red]Error:[/red] not a valid Argus JSON report: {exc}")
+            raise typer.Exit(2) from exc
+    else:
+        from argus.core.engine import ScanEngine
+        from argus.targets import resolve
+
+        try:
+            resolved = resolve(target)
+        except Exception as exc:
+            err_console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(2) from exc
+        try:
+            if resolved.web is not None:
+                result = _posture_result(resolved.web.url, quiet=quiet)
+            else:
+                project = resolved.project
+                assert project is not None
+                cfg = Config.load(
+                    project_root=project.root if project.origin == "local" else None
+                )
+                cfg.trust_project_config = project.origin == "local"
+                if scanners_opt:
+                    cfg.scanners = [s.strip() for s in scanners_opt.split(",") if s.strip()]
+                progress = None if quiet else (
+                    lambda m: err_console.print(f"[dim]· {escape(m)}[/dim]"))
+                result = ScanEngine(cfg, progress=progress).scan(project)
+        finally:
+            resolved.cleanup()
+
+    payload = build_ingest_payload(result, min_severity=floor)
+    try:
+        resp = push_result(payload, url=cloud_url, token=cloud_token)
+    except PushError as exc:
+        err_console.print(f"[red]Upload failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    dash = resp.get("url")
+    location = (cloud_url.rstrip("/") + dash) if isinstance(dash, str) and dash else ""
+    console.print(
+        f"[green]Uploaded {len(payload['findings'])} finding(s) to Argus Cloud.[/green]"
+        + (f"\nView it at {location}" if location else "")
+    )
+
+
+@app.command()
+def review(
+    target: str = typer.Argument(".", help="Local path to the checked-out repository."),
+    pr: int | None = typer.Option(
+        None, "--pr", help="Pull-request number (default: from GITHUB_REF in CI)."
+    ),
+    base: str | None = typer.Option(
+        None, "--base",
+        help="Base ref to diff against for changed lines "
+             "(default: origin/$GITHUB_BASE_REF in CI, else the default branch).",
+    ),
+    repo: str | None = typer.Option(
+        None, "--repo",
+        help="owner/repo (default: from GITHUB_REPOSITORY or the git remote).",
+    ),
+    baseline: Path | None = typer.Option(
+        None, "--baseline",
+        help="Previous Argus JSON report; comment only on findings not in it.",
+    ),
+    scanners_opt: str | None = typer.Option(
+        None, "--scanners", "-s", help="Comma-separated scanners to run (default: all)."
+    ),
+    exclude: str | None = typer.Option(
+        None, "--exclude", help="Comma-separated scanners to skip."
+    ),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Path to an .argus.yml config file."
+    ),
+    min_severity: str | None = typer.Option(
+        None, "--min-severity", help="Only review findings at/above this severity."
+    ),
+    fail_on: str | None = typer.Option(
+        None, "--fail-on", help="Exit non-zero if a reviewed finding is at/above this."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be posted without calling GitHub."
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output."),
+) -> None:
+    """Scan a checked-out PR and post the findings it introduces as review comments.
+
+    Diff-aware: with --baseline (a scan of the base branch), only findings the PR
+    introduces are posted; findings on changed lines are inline, the rest go in
+    the review summary. Reads GITHUB_TOKEN to post. Designed to run in CI on
+    pull_request events, but works locally with --pr/--repo/--base.
+    """
+    import os
+    import re
+
+    from argus.core.engine import ScanEngine
+    from argus.remediation import git_ops, pr_review
+    from argus.remediation.hosting import HostingError, RepoRef, parse_remote
+    from argus.targets import resolve
+
+    # --- resolve repo, PR number, and base ref (flags, then CI env) ---
+    ref: RepoRef | None = None
+    if repo and "/" in repo:
+        owner, _, name = repo.partition("/")
+        ref = RepoRef(host="github", owner=owner, repo=name,
+                      web_base="https://github.com")
+    elif os.environ.get("GITHUB_REPOSITORY", "").count("/") == 1:
+        owner, _, name = os.environ["GITHUB_REPOSITORY"].partition("/")
+        ref = RepoRef(host="github", owner=owner, repo=name,
+                      web_base="https://github.com")
+
+    pr_number = pr
+    if pr_number is None:
+        m = re.search(r"refs/pull/(\d+)/", os.environ.get("GITHUB_REF", ""))
+        if m:
+            pr_number = int(m.group(1))
+
+    try:
+        resolved = resolve(target)
+    except Exception as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(2) from exc
+    if resolved.project is None:
+        err_console.print("[red]Error:[/red] `argus review` needs a local repository path.")
+        raise typer.Exit(2)
+    project = resolved.project
+
+    if ref is None:
+        remote = git_ops.remote_url(project.root)
+        ref = parse_remote(remote) if remote else None
+    if ref is None or pr_number is None:
+        err_console.print(
+            "[red]Error:[/red] could not determine the repository and PR number. "
+            "Pass --repo owner/repo and --pr N (they are auto-detected in GitHub Actions)."
+        )
+        resolved.cleanup()
+        raise typer.Exit(2)
+
+    base_ref = base or (
+        f"origin/{os.environ['GITHUB_BASE_REF']}"
+        if os.environ.get("GITHUB_BASE_REF") else git_ops.default_branch(project.root)
+    )
+
+    try:
+        cfg = Config.load(
+            path=config,
+            project_root=project.root if project.origin == "local" else None,
+        )
+        cfg.trust_project_config = project.origin == "local"
+        cfg.ai.enabled = False  # a PR gate should be fast and deterministic
+        if scanners_opt:
+            cfg.scanners = [s.strip() for s in scanners_opt.split(",") if s.strip()]
+        if exclude:
+            cfg.exclude_scanners = [s.strip() for s in exclude.split(",") if s.strip()]
+        if min_severity:
+            cfg.min_severity = Severity.parse(min_severity)
+
+        progress = None if quiet else (lambda m: err_console.print(f"[dim]· {escape(m)}[/dim]"))
+        result = ScanEngine(cfg, progress=progress).scan(project)
+
+        if baseline is not None:
+            _apply_baseline(result, baseline, quiet=quiet)
+
+        changed = pr_review.changed_lines(project.root, base_ref)
+        try:
+            outcome = pr_review.post_findings_review(
+                ref, pr_number, result.findings, changed=changed, dry_run=dry_run
+            )
+        except HostingError as exc:
+            err_console.print(f"[red]Could not post review:[/red] {exc}")
+            raise typer.Exit(1) from exc
+
+        verb = "Would post" if dry_run else ("Posted" if outcome.posted else "No")
+        console.print(
+            f"[green]{verb} review:[/green] {outcome.total} finding(s) "
+            f"({outcome.inline} inline, {outcome.leftover} in summary) on PR #{pr_number}."
+        )
+
+        if fail_on and result.findings:
+            floor = Severity.parse(fail_on)
+            if max(f.severity for f in result.findings) >= floor:
+                err_console.print(f"[red]Failing:[/red] findings at/above {floor.label}.")
+                raise typer.Exit(1)
+    finally:
+        resolved.cleanup()
+
+
+@app.command()
+def learn(
+    target: str = typer.Argument(".", help="Local path or repo URL to learn from."),
+    scanners_opt: str | None = typer.Option(
+        None, "--scanners", "-s", help="Comma-separated scanners to run (default: all)."
+    ),
+    min_severity: str | None = typer.Option(
+        None, "--min-severity", help="Only teach findings at/above this severity."
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output."),
+) -> None:
+    """Explain each finding in your own code as a hands-on security lesson."""
+    from argus.core.engine import ScanEngine
+    from argus.reporting.learn import render_lessons
+    from argus.targets import resolve
+
+    try:
+        resolved = resolve(target)
+    except Exception as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(2) from exc
+    if resolved.project is None:
+        err_console.print("[red]Error:[/red] `argus learn` needs a local code path or repo.")
+        raise typer.Exit(2)
+
+    project = resolved.project
+    try:
+        cfg = Config.load(
+            project_root=project.root if project.origin == "local" else None
+        )
+        cfg.trust_project_config = project.origin == "local"
+        cfg.attack_simulation = True  # richer exploit walkthroughs make better lessons
+        if scanners_opt:
+            cfg.scanners = [s.strip() for s in scanners_opt.split(",") if s.strip()]
+        if min_severity:
+            cfg.min_severity = Severity.parse(min_severity)
+        progress = None if quiet else (lambda m: err_console.print(f"[dim]· {escape(m)}[/dim]"))
+        result = ScanEngine(cfg, progress=progress).scan(project)
+        console.print(render_lessons(result))
+    finally:
+        resolved.cleanup()
 
 
 @app.command()
@@ -439,7 +780,8 @@ def _apply_baseline(result: ScanResult, baseline: Path, *, quiet: bool) -> None:
 
 def _build_config(*, config, project_root, scanners, exclude, ai_provider, ai_model,
                   no_ai, attack_sim, patches, min_severity, fail_on,
-                  reachability=False, no_cache=False, verify_secrets=False) -> Config:
+                  reachability=False, no_cache=False, verify_secrets=False,
+                  secrets_history=False) -> Config:
     cfg = Config.load(path=config, project_root=project_root)
     if reachability:
         cfg.scanner_options.setdefault("dependencies", {})["reachability"] = True
@@ -447,6 +789,8 @@ def _build_config(*, config, project_root, scanners, exclude, ai_provider, ai_mo
         cfg.cache = False
     if verify_secrets:
         cfg.scanner_options.setdefault("secrets", {})["verify"] = True
+    if secrets_history:
+        cfg.scanner_options.setdefault("secrets", {})["history"] = True
     if scanners:
         cfg.scanners = [s.strip() for s in scanners.split(",") if s.strip()]
     if exclude:
@@ -498,22 +842,38 @@ def _print_fix_outcome(outcome, *, open_pr: bool, dry_run: bool) -> None:
         err_console.print(f"[red]Stopped:[/red] {outcome.error}")
 
 
-def _emit(result: ScanResult, formats: list[str], output: Path | None) -> None:
+def _emit(result: ScanResult, formats: list[str], output: Path | None,
+          audience: str | None = None) -> None:
     # Count file-bound formats (everything except the console table) so we know
     # whether a single -o file path is enough or we must disambiguate by extension.
     file_formats = [f for f in formats if f != "table"]
+    if output is None and len(file_formats) > 1:
+        err_console.print(
+            "[red]Error:[/red] multiple machine-readable -f formats require -o "
+            "(a directory or path); writing them all to stdout would concatenate "
+            "and corrupt the streams."
+        )
+        raise typer.Exit(2)
     treat_as_dir = output is not None and (
         output.is_dir() or (output.suffix == "" and not output.exists())
     )
 
     for fmt in formats:
         if fmt == "table":
-            _print_table(result)
+            if audience:
+                from argus.reporting.audience import render_for_audience
+                console.print(render_for_audience(result, audience))
+            else:
+                _print_table(result)
             continue
         cls = registry.reporters().get(fmt)
         if cls is None:
-            err_console.print(f"[yellow]Unknown format '{fmt}', skipping.[/yellow]")
-            continue
+            available = ", ".join(["table", *sorted(registry.reporters())])
+            err_console.print(
+                f"[red]Error:[/red] unknown format {fmt!r}. "
+                f"Available: {available}."
+            )
+            raise typer.Exit(2)
         rendered = cls().render(result)
         extension = cls().extension
         if output is None:
@@ -617,6 +977,33 @@ scanner_options:
     entropy: true
     entropy_threshold: 4.0
 """
+
+
+def _load_plugin_commands() -> None:
+    """Let installed add-on packages contribute CLI commands.
+
+    Each entry point in the ``argus.commands`` group is a callable that receives
+    the Typer ``app`` and registers one or more commands on it. This is how
+    optional/commercial add-ons (for example the Kubernetes assessment package)
+    add a subcommand without the core shipping or depending on their code. A
+    failing plugin is skipped with a warning; it never breaks the core CLI.
+    """
+    from importlib import metadata
+
+    try:
+        eps = metadata.entry_points(group="argus.commands")
+    except Exception:  # pragma: no cover - environment dependent
+        return
+    for ep in eps:
+        try:
+            ep.load()(app)
+        except Exception as exc:  # pragma: no cover - defensive
+            import warnings
+            warnings.warn(f"Failed to load Argus command plugin {ep.name!r}: {exc}",
+                          stacklevel=2)
+
+
+_load_plugin_commands()
 
 
 if __name__ == "__main__":  # pragma: no cover
