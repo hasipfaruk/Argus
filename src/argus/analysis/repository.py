@@ -110,13 +110,16 @@ class RepositoryAnalyzer:
                 languages[lang] = languages.get(lang, 0) + 1
 
             # Collect a bounded blob of source text for signal matching.
-            if lang and lang not in {"JSON", "CSS", "HTML"}:
-                if source_blob_used < _SOURCE_BLOB_BUDGET:
-                    room = _SOURCE_BLOB_BUDGET - source_blob_used
-                    chunk = f.text()[: min(_PER_FILE_SOURCE_CAP, room)]
-                    if chunk:
-                        source_blob_parts.append(chunk)
-                        source_blob_used += len(chunk)
+            if (
+                lang
+                and lang not in {"JSON", "CSS", "HTML"}
+                and source_blob_used < _SOURCE_BLOB_BUDGET
+            ):
+                room = _SOURCE_BLOB_BUDGET - source_blob_used
+                chunk = f.text()[: min(_PER_FILE_SOURCE_CAP, room)]
+                if chunk:
+                    source_blob_parts.append(chunk)
+                    source_blob_used += len(chunk)
 
             self._classify_infra(project, f, arch)
 

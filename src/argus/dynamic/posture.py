@@ -130,10 +130,7 @@ def _hostname_is_public(hostname: str) -> bool:
         return False
     if not infos:
         return False
-    for info in infos:
-        if not ipaddress.ip_address(info[4][0]).is_global:
-            return False
-    return True
+    return all(ipaddress.ip_address(info[4][0]).is_global for info in infos)
 
 
 def _assert_http_url(url: str) -> None:

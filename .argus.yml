@@ -10,7 +10,12 @@
 #   - benchmark corpora are third-party vulnerable apps cloned locally.
 exclude_paths:
   - "examples/**"
-  - "benchmarks/.corpora/**"
+  # The whole benchmarks tree is corpus/harness data, not shipped product code:
+  # the labeled accuracy corpus (accuracy.py) embeds vulnerable snippets and
+  # example secrets as data, run_benchmarks.py clones third-party vulnerable
+  # apps, and results/*.json are recorded finding inventories. Excluded for the
+  # same reason as tests/** below.
+  - "benchmarks/**"
   - "tests/**"
   # Separate, commercially-licensed add-on package (kept out of this repo); it
   # has its own tooling and a gitignored signing key, not part of this scan.
