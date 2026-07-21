@@ -44,6 +44,22 @@ def _offline_osv(request, monkeypatch):
     monkeypatch.setattr(osv, "query", _raise)
 
 
+@pytest.fixture(autouse=True)
+def _offline_exploit_signals(request, monkeypatch):
+    """Disable EPSS/KEV enrichment in tests unless explicitly exercised.
+
+    Mirrors _offline_osv: the dependency scanner enriches CVE findings over the
+    network by default. Force it to a no-op so the suite stays offline and fast.
+    Tests that exercise the client opt in with @pytest.mark.exploit_network and
+    inject a mock transport, so they still never touch the real network.
+    """
+    if request.node.get_closest_marker("exploit_network"):
+        return
+    from argus.scanners import exploit_signals
+
+    monkeypatch.setattr(exploit_signals, "enrich", lambda *a, **k: {})
+
+
 @pytest.fixture
 def vulnerable_project(tmp_path: Path) -> Project:
     """A tiny project with one planted vulnerability of each major class."""

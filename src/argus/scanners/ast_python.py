@@ -270,7 +270,12 @@ class _Analyzer:
         args = call.child_by_field_name("arguments")
         if args is None:
             return None
-        if not any(self._tainted(a, tainted) for a in args.named_children):
+        named = args.named_children
+        # For SQL sinks, only the first argument (the query string) is dangerous.
+        # A tainted value in a later argument is a bound parameter, i.e. the safe,
+        # parameterized form `execute("... %s", (uid,))`, and must NOT be flagged.
+        to_check = named[:1] if sink.id == "ast-sql-injection" else named
+        if not any(self._tainted(a, tainted) for a in to_check):
             return None
         line = call.start_point[0] + 1
         key = (sink.id, line)

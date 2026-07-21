@@ -3,7 +3,7 @@
 # Usage, add to your project's .pre-commit-config.yaml:
 #
 #   repos:
-#     - repo: https://github.com/hasipfaruk/Argus
+#     - repo: https://github.com/Argus-CodeSecurity/Argus-appsec
 #       rev: v0.7.0
 #       hooks:
 #         - id: argus-secrets          # fast: secrets only, ideal for every commit

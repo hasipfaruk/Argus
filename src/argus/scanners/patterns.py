@@ -129,7 +129,11 @@ RULES: list[Rule] = [
     Rule(
         id="python-os-system",
         title="Use of os.system with a dynamic argument",
-        pattern=_rx(r"os\.system\(\s*[^)]*[+%f]"),
+        # Dynamic argument = string concatenation (+), %-format, or an f-string
+        # prefix. The old `[+%f]` class also matched any literal 'f', so constant
+        # commands like os.system("df -h") / os.system("find .") fired as false
+        # positives. Anchor the f-string case to the quote to avoid that.
+        pattern=_rx(r"os\.system\(\s*(?:[^)]*[+%]|f['\"])"),
         severity=Severity.HIGH, cwe=["CWE-78"], owasp=["A03:2021-Injection"],
         languages={"Python"}, confidence=Confidence.MEDIUM,
         why="os.system runs its argument through the shell; building it from "
@@ -219,7 +223,7 @@ RULES: list[Rule] = [
         id="python-eval-exec",
         title="Use of eval/exec on dynamic input",
         # Match only the bare builtins eval()/exec(), never a method call like
-        # ``session.exec(...)`` (SQLModel) or ``cursor.exec(...)`` — the lookbehind
+        # ``session.exec(...)`` (SQLModel) or ``cursor.exec(...)``. The lookbehind
         # rejects a preceding ``.`` or word char so those safe APIs are not flagged.
         pattern=_rx(r"(?<![\w.])(eval|exec)\s*\(\s*(?!['\"]\s*\))"),
         severity=Severity.HIGH, cwe=["CWE-95"], owasp=["A03:2021-Injection"],
@@ -387,13 +391,18 @@ class PatternScanner(Scanner):
         # Custom rules can change on disk without any scanned file changing, so a
         # run that loads them opts out of the per-file cache to stay correct.
         rules_opt = ctx.config.options_for(self.name).get("rules")
+        trust = getattr(ctx.config, "trust_project_config", True)
         from argus.scanners.custom_rules import config_signature
-        return self.file_local and not config_signature(ctx.project.root, rules_opt)
+        return self.file_local and not config_signature(
+            ctx.project.root, rules_opt, trust)
 
     def _effective_rules(self, ctx: ScannerContext) -> list[Rule]:
         rules_opt = ctx.config.options_for(self.name).get("rules")
+        # A cloned, untrusted repo must not be able to inject rules via its own
+        # .argus/rules convention directory (rule injection / ReDoS).
+        trust = getattr(ctx.config, "trust_project_config", True)
         from argus.scanners.custom_rules import load_custom_rules
-        return [*RULES, *load_custom_rules(ctx.project.root, rules_opt)]
+        return [*RULES, *load_custom_rules(ctx.project.root, rules_opt, trust)]
 
     def scan(self, ctx: ScannerContext) -> Iterable[Finding]:
         counter = 0

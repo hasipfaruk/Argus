@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from argus.dynamic import posture
 
@@ -145,3 +146,50 @@ def test_bare_hostname_gets_https_scheme(monkeypatch):
     monkeypatch.setattr(httpx, "Client", _Client)
     posture.probe("example.com", check_paths=False)
     assert seen["url"].startswith("https://")
+
+
+def test_hostname_is_public_rejects_link_local_and_loopback():
+    assert posture._hostname_is_public("169.254.169.254") is False
+    assert posture._hostname_is_public("127.0.0.1") is False
+    assert posture._hostname_is_public("10.0.0.1") is False
+    assert posture._hostname_is_public("8.8.8.8") is True
+
+
+def test_redirect_to_metadata_ip_is_blocked():
+    with pytest.raises(ValueError, match="non-public"):
+        posture._assert_redirect_safe(
+            "https://example.com/", "http://169.254.169.254/latest/meta-data/"
+        )
+
+
+def test_same_host_redirect_is_allowed():
+    posture._assert_redirect_safe(
+        "https://example.com/a", "https://example.com/b"
+    )
+
+
+def test_probe_blocks_ssrf_redirect_to_metadata(monkeypatch):
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url):
+            if "example.com" in url and "169.254" not in url:
+                return httpx.Response(
+                    302,
+                    headers={"location": "http://169.254.169.254/latest/meta-data/"},
+                    request=httpx.Request("GET", url),
+                )
+            raise AssertionError(f"SSRF redirect was followed to {url}")
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    findings = posture.probe("https://example.com", check_paths=False)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "posture.unreachable"
+    assert "non-public" in findings[0].description

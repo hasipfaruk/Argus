@@ -1,0 +1,20 @@
+# Keep dependencies and Action pins current. A security scanner with stale or
+# unpinned dependencies is one typosquat away from being the supply-chain attack
+# it warns about, so updates are automated and reviewed.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

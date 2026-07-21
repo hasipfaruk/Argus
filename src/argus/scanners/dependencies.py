@@ -85,16 +85,35 @@ def _matches_range(version: str, spec: str) -> bool:
 
 
 # --- manifest parsers ------------------------------------------------------
-def _parse_requirements(text: str) -> dict[str, str]:
-    deps: dict[str, str] = {}
+# Each parser returns a list of (package, version) pairs. Returning pairs rather
+# than a {name: version} dict preserves a package pinned at MULTIPLE versions in
+# one tree (routine in npm nested node_modules, Cargo, composer); a name-keyed
+# dict silently dropped all but the last, so the others were never scanned.
+def _unique_pairs(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """De-duplicate (name, version) pairs, preserving first-seen order.
+
+    Keeps *distinct versions* of the same package (the whole point); only exact
+    duplicates collapse, so downstream querying stays deterministic.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+    for pair in pairs:
+        if pair not in seen:
+            seen.add(pair)
+            out.append(pair)
+    return out
+
+
+def _parse_requirements(text: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
     for line in text.splitlines():
         line = line.split("#", 1)[0].strip()
         if not line or line.startswith("-"):
             continue
         m = re.match(r"^([A-Za-z0-9_.\-]+)\s*==\s*([0-9][\w.\-]*)", line)
         if m:
-            deps[m.group(1).lower()] = m.group(2)
-    return deps
+            pairs.append((m.group(1).lower(), m.group(2)))
+    return _unique_pairs(pairs)
 
 
 def _loads(text: str) -> dict | None:
@@ -106,25 +125,25 @@ def _loads(text: str) -> dict | None:
         return None
 
 
-def _parse_package_json(text: str) -> dict[str, str]:
-    deps: dict[str, str] = {}
+def _parse_package_json(text: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
     data = _loads(text)
     if not isinstance(data, dict):
-        return deps
+        return pairs
     for key in ("dependencies", "devDependencies", "optionalDependencies"):
         for name, ver in (data.get(key) or {}).items():
             cleaned = ver.lstrip("^~>=< ").strip()
             if re.match(r"^\d", cleaned):
-                deps[name.lower()] = cleaned
-    return deps
+                pairs.append((name.lower(), cleaned))
+    return _unique_pairs(pairs)
 
 
-def _parse_package_lock(text: str) -> dict[str, str]:
+def _parse_package_lock(text: str) -> list[tuple[str, str]]:
     """npm ``package-lock.json``, full transitive tree (lockfileVersion 1/2/3)."""
-    deps: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
     data = _loads(text)
     if not isinstance(data, dict):
-        return deps
+        return pairs
 
     packages = data.get("packages")
     if isinstance(packages, dict):  # lockfileVersion 2/3
@@ -134,7 +153,7 @@ def _parse_package_lock(text: str) -> dict[str, str]:
             name = key.split("node_modules/")[-1]
             ver = str(meta.get("version", ""))
             if name and re.match(r"^\d", ver):
-                deps.setdefault(name.lower(), ver)
+                pairs.append((name.lower(), ver))  # keep every pinned version
 
     def _walk(tree: object) -> None:  # lockfileVersion 1
         if not isinstance(tree, dict):
@@ -144,17 +163,17 @@ def _parse_package_lock(text: str) -> dict[str, str]:
                 continue
             ver = str(meta.get("version", ""))
             if re.match(r"^\d", ver):
-                deps.setdefault(name.lower(), ver)
+                pairs.append((name.lower(), ver))
             _walk(meta.get("dependencies"))
 
     if not packages:
         _walk(data.get("dependencies"))
-    return deps
+    return _unique_pairs(pairs)
 
 
-def _parse_yarn_lock(text: str) -> dict[str, str]:
+def _parse_yarn_lock(text: str) -> list[tuple[str, str]]:
     """yarn.lock (classic v1 and berry), resolved versions per package."""
-    deps: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
     names: list[str] = []
     for raw in text.splitlines():
         if not raw.strip() or raw.lstrip().startswith("#"):
@@ -171,14 +190,14 @@ def _parse_yarn_lock(text: str) -> dict[str, str]:
             m = re.match(r'\s+version:?\s+"?([0-9][^"\s]*)"?', raw)
             if m and names:
                 for name in names:
-                    deps.setdefault(name, m.group(1))
+                    pairs.append((name, m.group(1)))
                 names = []
-    return deps
+    return _unique_pairs(pairs)
 
 
-def _parse_toml_packages(text: str) -> dict[str, str]:
+def _parse_toml_packages(text: str) -> list[tuple[str, str]]:
     """TOML lock files with ``[[package]]`` entries, poetry.lock and Cargo.lock."""
-    deps: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
     current: str | None = None
     for raw in text.splitlines():
         line = raw.strip()
@@ -191,18 +210,18 @@ def _parse_toml_packages(text: str) -> dict[str, str]:
             continue
         m = re.match(r'version\s*=\s*"([^"]+)"', line)
         if m and current:
-            deps.setdefault(current, m.group(1))
+            pairs.append((current, m.group(1)))  # Cargo pins the same crate twice
             current = None
-    return deps
+    return _unique_pairs(pairs)
 
 
 # Back-compat alias (poetry.lock shares the [[package]] shape).
 _parse_poetry_lock = _parse_toml_packages
 
 
-def _parse_go_mod(text: str) -> dict[str, str]:
+def _parse_go_mod(text: str) -> list[tuple[str, str]]:
     """go.mod, module requirements (both block and single-line ``require``)."""
-    deps: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
     in_block = False
     for raw in text.splitlines():
         line = raw.split("//", 1)[0].strip()  # drop `// indirect` and comments
@@ -220,26 +239,26 @@ def _parse_go_mod(text: str) -> dict[str, str]:
             continue
         m = re.match(r"^(\S+)\s+v([0-9][\w.\-]*)", line)
         if m:
-            deps.setdefault(m.group(1), m.group(2))  # Go paths are case-sensitive
-    return deps
+            pairs.append((m.group(1), m.group(2)))  # Go paths are case-sensitive
+    return _unique_pairs(pairs)
 
 
-def _parse_gemfile_lock(text: str) -> dict[str, str]:
+def _parse_gemfile_lock(text: str) -> list[tuple[str, str]]:
     """Gemfile.lock, resolved gem specs (4-space indented ``name (version)``)."""
-    deps: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
     for raw in text.splitlines():
         m = re.match(r"^ {4}([A-Za-z0-9_.\-]+) \(([0-9][^)]*)\)\s*$", raw)
         if m:
-            deps.setdefault(m.group(1), m.group(2))
-    return deps
+            pairs.append((m.group(1), m.group(2)))
+    return _unique_pairs(pairs)
 
 
-def _parse_composer_lock(text: str) -> dict[str, str]:
+def _parse_composer_lock(text: str) -> list[tuple[str, str]]:
     """composer.lock, Packagist packages (runtime and dev)."""
-    deps: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
     data = _loads(text)
     if not isinstance(data, dict):
-        return deps
+        return pairs
     for section in ("packages", "packages-dev"):
         for entry in data.get(section) or []:
             if not isinstance(entry, dict):
@@ -247,24 +266,24 @@ def _parse_composer_lock(text: str) -> dict[str, str]:
             name = entry.get("name", "")
             ver = str(entry.get("version", "")).lstrip("v").strip()
             if name and re.match(r"^\d", ver):
-                deps.setdefault(name, ver)
-    return deps
+                pairs.append((name, ver))
+    return _unique_pairs(pairs)
 
 
-def _parse_pipfile_lock(text: str) -> dict[str, str]:
+def _parse_pipfile_lock(text: str) -> list[tuple[str, str]]:
     """Pipfile.lock, default and develop dependency sections."""
-    deps: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
     data = _loads(text)
     if not isinstance(data, dict):
-        return deps
+        return pairs
     for section in ("default", "develop"):
         for name, meta in (data.get(section) or {}).items():
             if not isinstance(meta, dict):
                 continue
             ver = str(meta.get("version", "")).lstrip("=<>~ ").strip()
             if re.match(r"^\d", ver):
-                deps.setdefault(name.lower(), ver)
-    return deps
+                pairs.append((name.lower(), ver))
+    return _unique_pairs(pairs)
 
 
 # Manifest/lock file name -> (ecosystem, parser). Lock files first so their exact,
@@ -337,6 +356,34 @@ def _annotate_reachability(finding: Finding, pkg: str, py_imports: set[str]) -> 
         finding.likelihood = Likelihood.UNLIKELY
 
 
+def _annotate_exploit_signals(finding: Finding, signal) -> None:
+    """Attach EPSS and CISA KEV context to a CVE finding.
+
+    Severity is deliberately left untouched: teams gate pipelines on it via
+    ``--fail-on``, so it is a stable contract. KEV membership (confirmed exploited
+    in the wild) does raise the *likelihood*, which sharpens prioritization and
+    sort order without changing that contract. Likelihood is only ever raised,
+    never lowered, so this composes safely with the reachability annotation.
+    """
+    if not signal.has_signal:
+        return
+    finding.metadata["kev"] = signal.kev
+    bits: list[str] = []
+    if signal.kev:
+        bits.append("on the CISA KEV catalog (confirmed exploited in the wild)")
+        if "kev" not in finding.tags:
+            finding.tags.append("kev")
+        if finding.likelihood < Likelihood.ALMOST_CERTAIN:
+            finding.likelihood = Likelihood.ALMOST_CERTAIN
+    if signal.epss is not None:
+        finding.metadata["epss"] = round(signal.epss, 5)
+        finding.metadata["epss_percentile"] = round(signal.percentile or 0.0, 4)
+        pct = (signal.percentile or 0.0) * 100
+        bits.append(f"EPSS {signal.epss:.1%} (higher than {pct:.0f}% of scored CVEs)")
+    if bits:
+        finding.description = f"{finding.description}\n\nExploit signals: " + "; ".join(bits) + "."
+
+
 @scanner
 class DependencyScanner(Scanner):
     name = "dependencies"
@@ -352,6 +399,8 @@ class DependencyScanner(Scanner):
         timeout = float(opts.get("timeout", 15.0))
         use_cache = bool(opts.get("cache", True))
         use_reachability = bool(opts.get("reachability", False))
+        # EPSS + CISA KEV enrichment: on by default when online, best-effort.
+        use_exploit = online and bool(opts.get("exploit_signals", True))
         counter = 0
 
         # Experimental import-level reachability (Python only for now): computed
@@ -368,10 +417,11 @@ class DependencyScanner(Scanner):
         per_eco: dict[str, dict[tuple[str, str], tuple[str, str, str]]] = {}
         for manifest_name, (ecosystem, parser) in _PARSERS.items():
             for f in ctx.project.files_matching(manifest_name):
-                for pkg, version in parser(f.text()).items():
+                for pkg, version in parser(f.text()):
                     bucket = per_eco.setdefault(ecosystem, {})
                     bucket.setdefault((pkg, version), (f.rel_path, pkg, version))
 
+        findings: list[Finding] = []
         for ecosystem, bucket in per_eco.items():
             entries = list(bucket.values())
             osv_map, source = self._resolve_source(
@@ -387,16 +437,35 @@ class DependencyScanner(Scanner):
                     finding = self._finding(adv, counter, path, pkg, version)
                     if py_imports is not None and ecosystem == "PyPI":
                         _annotate_reachability(finding, pkg, py_imports)
-                    yield finding
+                    findings.append(finding)
+
+        # Enrich CVE findings with exploit signals in one batched pass, so the
+        # EPSS query and KEV fetch happen once for the whole scan.
+        if use_exploit:
+            cves = {f.metadata.get("cve") for f in findings if f.metadata.get("cve")}
+            if cves:
+                from argus.scanners import exploit_signals
+                signals = exploit_signals.enrich(
+                    {c for c in cves if c}, timeout=timeout, use_cache=use_cache)
+                for finding in findings:
+                    sig = signals.get(finding.metadata.get("cve") or "")
+                    if sig is not None:
+                        _annotate_exploit_signals(finding, sig)
+
+        yield from findings
 
     def _resolve_source(self, ecosystem, entries, online, timeout, use_cache=True):
         """Return (osv_map, source). Prefer live OSV; fall back to the bundled seed."""
         if not online:
             return {}, "bundled"
-        deps = {pkg: version for _, pkg, version in entries}
+        # Pass every (package, version) pair, not a {package: version} dict. A
+        # package pinned at two versions in a lock tree (routine in npm / Cargo /
+        # composer) must be queried at BOTH; collapsing to a dict dropped one and
+        # silently left it unscanned.
+        pairs = [(pkg, version) for _, pkg, version in entries]
         from argus.scanners import osv
         try:
-            return osv.query(ecosystem, deps, timeout=timeout, use_cache=use_cache), "osv"
+            return osv.query(ecosystem, pairs, timeout=timeout, use_cache=use_cache), "osv"
         except osv.OSVError as exc:
             # Offline/timeout/API problem: fall back to the bundled seed, but say so
             #, a silent fallback in a security tool hides reduced coverage.

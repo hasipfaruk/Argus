@@ -13,14 +13,16 @@ reports runtime misconfigurations that source analysis cannot observe:
 * **Version disclosure**, Server / X-Powered-By advertising exact versions.
 
 Deliberately non-intrusive: only GETs, only the paths listed here, one pass,
-short timeout, redirects followed. It never sends payloads, mutates state, or
-attempts exploitation, so it is safe to point at systems you are authorized to
-assess. It is not a substitute for full DAST.
+short timeout, redirects followed with SSRF guards. It never sends payloads,
+mutates state, or attempts exploitation, so it is safe to point at systems you
+are authorized to assess. It is not a substitute for full DAST.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import socket
 from urllib.parse import urljoin, urlparse
 
 from argus.core.models import (
@@ -36,6 +38,8 @@ log = logging.getLogger("argus.dynamic.posture")
 
 _TIMEOUT = 10.0
 _UA = {"User-Agent": "argus-posture-check"}
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 # Header -> (severity, why, fix). Absence of the header is the finding.
 _SECURITY_HEADERS = {
@@ -108,6 +112,74 @@ _SENSITIVE_PATHS = [
 ]
 
 
+def _hostname_is_public(hostname: str) -> bool:
+    """True if ``hostname`` resolves only to globally routable addresses.
+
+    Literal IPs are checked directly. Names fail closed on DNS errors, and fail
+    if *any* resolved address is private, loopback, link-local, or otherwise
+    non-global (SSRF into cloud metadata / RFC1918).
+    """
+    host = hostname.strip("[]")
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        if not ipaddress.ip_address(info[4][0]).is_global:
+            return False
+    return True
+
+
+def _assert_http_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError(f"refusing non-http(s) URL: {url!r}")
+
+
+def _assert_redirect_safe(origin_url: str, next_url: str) -> None:
+    """Block open-redirect SSRF into non-public address space.
+
+    Direct probes of localhost / private hosts are allowed (the operator chose
+    the target). A public origin that redirects cross-host into private,
+    loopback, or link-local space is not.
+    """
+    _assert_http_url(next_url)
+    origin_host = (urlparse(origin_url).hostname or "").lower()
+    next_host = (urlparse(next_url).hostname or "").lower()
+    if not next_host:
+        raise ValueError("redirect missing host")
+    if next_host == origin_host:
+        return
+    if not _hostname_is_public(next_host):
+        raise ValueError(
+            f"refusing redirect from {origin_host!r} to non-public host {next_host!r}"
+        )
+
+
+def _get(client, url: str):
+    """GET ``url``, manually following redirects with SSRF checks per hop."""
+    current = url
+    origin = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        _assert_http_url(current)
+        resp = client.get(current)
+        if resp.status_code not in _REDIRECT_STATUSES:
+            return resp
+        location = resp.headers.get("location")
+        if not location:
+            return resp
+        nxt = urljoin(str(resp.url), location)
+        _assert_redirect_safe(origin, nxt)
+        current = nxt
+    raise ValueError(f"too many redirects while probing {url}")
+
+
 def probe(url: str, *, check_paths: bool = True) -> list[Finding]:
     """Run posture checks against ``url``. Returns findings; never raises.
 
@@ -125,9 +197,11 @@ def probe(url: str, *, check_paths: bool = True) -> list[Finding]:
 
     findings: list[Finding] = []
     try:
-        with httpx.Client(follow_redirects=True, timeout=_TIMEOUT,
+        # follow_redirects=False: we walk hops ourselves so a public target
+        # cannot bounce us into link-local / metadata / RFC1918 space.
+        with httpx.Client(follow_redirects=False, timeout=_TIMEOUT,
                           headers=_UA) as client:
-            resp = client.get(url)
+            resp = _get(client, url)
             findings.extend(_check_transport(client, url, resp))
             findings.extend(_check_headers(str(resp.url), resp))
             findings.extend(_check_cookies(str(resp.url), resp))
@@ -234,7 +308,7 @@ def _check_sensitive_paths(client, base_url: str) -> list[Finding]:
     for path, title in _SENSITIVE_PATHS:
         target = urljoin(root, path)
         try:
-            r = client.get(target)
+            r = _get(client, target)
         except Exception:
             continue
         # A 200 with non-trivial, non-HTML body is a real exposure; many apps

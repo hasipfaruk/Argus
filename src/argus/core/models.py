@@ -14,7 +14,27 @@ from datetime import datetime, timezone
 from enum import IntEnum
 from typing import Any, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
+
+# Documentation home. Every finding links back to the relevant scanner page, so a
+# report is a jumping-off point into the docs (and, incidentally, good SEO).
+_DOCS_BASE = "https://argus-codesecurity.github.io/Argus-appsec"
+_SCANNER_DOC_ANCHOR = {
+    "secrets": "secrets",
+    "dependencies": "dependencies-sca",
+    "patterns": "sast-pattern-rules",
+    "ast-python": "taint-data-flow-ast",
+    "ast-js": "taint-data-flow-ast",
+    "iac": "infrastructure-as-code",
+    "llm": "llm-ai-application-security",
+    "custom_rules": "custom-rules",
+}
+
+
+def docs_url_for(scanner: str) -> str:
+    """The docs URL for a scanner's page (used on every finding)."""
+    anchor = _SCANNER_DOC_ANCHOR.get(scanner)
+    return f"{_DOCS_BASE}/scanners/" + (f"#{anchor}" if anchor else "")
 
 _E = TypeVar("_E", bound="_LabeledIntEnum")
 
@@ -163,6 +183,11 @@ class Finding(BaseModel):
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @computed_field  # serialized into JSON so every finding links to its docs
+    @property
+    def docs_url(self) -> str:
+        return docs_url_for(self.scanner)
 
     def fingerprint(self) -> str:
         """A stable identifier used to de-duplicate and track findings over time.

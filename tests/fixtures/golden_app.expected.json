@@ -1,0 +1,6 @@
+[
+  "iac:iac.docker-latest-tag@Dockerfile:1",
+  "patterns:patterns.python-shell-true@app.py:6",
+  "patterns:patterns.weak-hash-md5-sha1@app.py:10",
+  "secrets:secrets.aws-access-key-id@config.py:1"
+]
