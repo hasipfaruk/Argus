@@ -25,15 +25,17 @@ well-defined object to the next.
                                     ▼
                               ScanResult
                                     │
-             Reporter.render        │  json | sarif | markdown | html | csv
+             Reporter.render        │  json | sarif | markdown | html | csv | badge | vex
                                     ▼
                              report string(s)
 ```
 
 The engine (`argus.core.engine.ScanEngine`) owns orchestration. It is synchronous
-and free of side effects apart from reading the target: `scan()` returns a
-`ScanResult` and writes nothing to disk. Writing reports and creating pull
-requests are separate, explicit actions performed by the CLI or an integration.
+and free of side effects on the *target*: `scan()` returns a `ScanResult` and
+never modifies scanned source. Its only write is to Argus's own scan-cache
+directory (disable with `--no-cache` / `cache: false`). Writing reports and
+creating pull requests are separate, explicit actions performed by the CLI or an
+integration.
 
 ## Core modules
 
