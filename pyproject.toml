@@ -58,6 +58,10 @@ dashboard = [
   "sqlmodel>=0.0.14",
   "python-multipart>=0.0.9",
 ]
+# Build the documentation site (MkDocs Material).
+docs = [
+  "mkdocs-material>=9.5",
+]
 # Everything for local development and tests
 dev = [
   "pytest>=8.0",
@@ -77,10 +81,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hasipfaruk/Argus"
-Documentation = "https://github.com/hasipfaruk/Argus/tree/main/docs"
-Repository = "https://github.com/hasipfaruk/Argus"
-Issues = "https://github.com/hasipfaruk/Argus/issues"
+Homepage = "https://github.com/Argus-CodeSecurity/Argus-appsec"
+Documentation = "https://github.com/Argus-CodeSecurity/Argus-appsec/tree/main/docs"
+Repository = "https://github.com/Argus-CodeSecurity/Argus-appsec"
+Issues = "https://github.com/Argus-CodeSecurity/Argus-appsec/issues"
 
 [project.scripts]
 argus = "argus.cli.main:app"
@@ -98,6 +102,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
   "osv_network: exercises the OSV client with a mocked transport (never the real network)",
+  "exploit_network: exercises the EPSS/KEV client with a mocked transport (never the real network)",
 ]
 
 [tool.ruff]
@@ -106,7 +111,8 @@ target-version = "py310"
 src = ["src", "tests"]
 # The example app contains deliberately insecure, non-idiomatic code so the
 # scanners have something to find. Linting it is meaningless, exclude it.
-extend-exclude = ["examples"]
+# argus-k8s is a separate, commercially-licensed package with its own config.
+extend-exclude = ["examples", "argus-k8s"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

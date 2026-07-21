@@ -7,7 +7,7 @@ plugins and never touch the core. That keeps the barrier low and the core stable
 ## Getting set up
 
 ```bash
-git clone https://github.com/hasipfaruk/Argus
+git clone https://github.com/Argus-CodeSecurity/Argus-appsec
 cd Argus
 python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"

@@ -47,7 +47,12 @@ def _get(url: str, headers: dict[str, str]) -> int | None:
         return None
 
 
-def _status_verdict(status: int | None, *, live=(200,), invalid=(401, 403)) -> str:
+def _status_verdict(status: int | None, *, live=(200,), invalid=(401,)) -> str:
+    # Only 401 (Unauthorized) definitively means the credential is bad. 403 is
+    # commonly rate-limiting (GitHub) or a valid-but-forbidden token, so mapping
+    # it to INVALID would wrongly downgrade a live secret -- the dangerous
+    # direction for a security tool. 403 (and anything else) falls through to
+    # UNKNOWN so the finding is neither dismissed nor over-claimed.
     if status is None:
         return UNKNOWN
     if status in live:

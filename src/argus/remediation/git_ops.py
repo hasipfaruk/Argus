@@ -45,6 +45,15 @@ def current_branch(root: Path) -> str:
     return _run(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
 
 
+def diff(root: Path, *args: str) -> str:
+    """Return `git diff <args>` stdout (empty string on failure).
+
+    Used by the PR-review flow to discover which lines a pull request changed.
+    Non-fatal: a missing ref just yields an empty diff (a full, non-diff review).
+    """
+    return _run(root, "diff", *args, check=False).stdout
+
+
 def has_uncommitted_changes(root: Path) -> bool:
     return bool(_run(root, "status", "--porcelain").stdout.strip())
 
@@ -85,6 +94,17 @@ def branch_exists(root: Path, name: str) -> bool:
 
 def stage_all(root: Path) -> None:
     _run(root, "add", "-A")
+
+
+def stage_paths(root: Path, paths: list[str]) -> None:
+    """Stage only the given project-relative paths.
+
+    Used by the fix workflow instead of ``git add -A`` so that only files Argus
+    actually rewrote are committed, never a developer's unrelated changes.
+    """
+    if not paths:
+        return
+    _run(root, "add", "--", *paths)
 
 
 def commit(root: Path, message: str, *, author_name: str = "Argus",

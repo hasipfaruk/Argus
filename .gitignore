@@ -29,6 +29,10 @@ benchmarks/.corpora/
 docs/internal/
 docs/*.docx
 
+# Commercial add-on package. Kept OUT of this Apache-2.0 repo on purpose; it
+# lives (and ships) as its own separately-licensed project. Never commit it here.
+argus-k8s/
+
 # Environment / secrets
 .env
 .env.*

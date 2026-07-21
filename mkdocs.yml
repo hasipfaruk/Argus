@@ -1,0 +1,83 @@
+site_name: Argus AppSec
+site_description: >-
+  Argus AppSec, the open-source AI security engineer. Unified, explainable
+  security analysis across code, dependencies, secrets, IaC, and AI, with
+  verified fixes.
+site_url: https://argus-codesecurity.github.io/Argus-appsec/
+repo_url: https://github.com/Argus-CodeSecurity/Argus-appsec
+repo_name: Argus-CodeSecurity/Argus-appsec
+edit_uri: edit/main/docs/
+copyright: Argus AppSec, Apache-2.0. The command is <code>argus</code>.
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Scanners & coverage: scanners.md
+      - Configuration: configuration.md
+      - Triage & baselines: triage.md
+  - Using in your pipeline:
+      - CI/CD integration: ci-cd.md
+      - Continuous monitoring: monitoring.md
+      - Fixing & pull requests: fixing.md
+      - MCP server (AI agents): mcp.md
+      - Web dashboard: dashboard.md
+  - Deeper:
+      - LLM / AI security: llm-security.md
+      - Attack simulation: attack-simulation.md
+      - Architecture: architecture.md
+      - Writing plugins: plugins.md
+      - Performance: performance.md
+  - Trust:
+      - Benchmarks & accuracy: benchmarks.md
+      - How Argus compares: comparison.md
+      - Security & threat model: security.md
+
+exclude_docs: |
+  README.md
+  internal/

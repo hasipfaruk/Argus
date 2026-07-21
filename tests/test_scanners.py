@@ -166,7 +166,7 @@ def test_dependency_version_range():
 
 def test_requirements_parser():
     deps = _parse_requirements("flask==2.0.1\n# comment\nrequests==2.25.0\n-e .\n")
-    assert deps == {"flask": "2.0.1", "requests": "2.25.0"}
+    assert dict(deps) == {"flask": "2.0.1", "requests": "2.25.0"}
 
 
 def test_entropy_distinguishes_random_from_words():

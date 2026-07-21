@@ -20,9 +20,11 @@ def register_builtins() -> None:
         openai_provider,
     )
     from argus.reporting import (  # noqa: F401  (registers reporters)
+        badge,
         gitlab,
         html,
         json_reporter,
         markdown,
         sarif,
+        vex,
     )

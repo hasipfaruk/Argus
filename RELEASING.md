@@ -23,8 +23,8 @@ project even exists on PyPI.
 - Go to <https://pypi.org/manage/account/publishing/>.
 - Under **Add a new pending publisher**, fill in exactly:
   - **PyPI Project Name:** `argus-appsec`
-  - **Owner:** `hasipfaruk`
-  - **Repository name:** `Argus`
+  - **Owner:** `Argus-CodeSecurity`
+  - **Repository name:** `Argus-appsec`
   - **Workflow name:** `publish.yml`
   - **Environment name:** `pypi`
 - Click **Add**.

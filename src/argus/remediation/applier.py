@@ -68,8 +68,14 @@ def apply_fixes(
     *,
     include_unverified: bool = False,
     dry_run: bool = False,
+    only_rules: set[str] | None = None,
 ) -> ApplyReport:
-    """Apply deterministic fixes for the given findings to the project's files."""
+    """Apply deterministic fixes for the given findings to the project's files.
+
+    When ``only_rules`` is given, only findings whose ``rule_id`` is in that set
+    are fixed (used by ``argus fix --auto`` to apply just the auto-tier rules);
+    others are left untouched.
+    """
     report = ApplyReport(dry_run=dry_run)
 
     # Group findings that have a line by file so each file is read/written once.
@@ -78,10 +84,25 @@ def apply_fixes(
     for f in findings:
         if f.location.start_line is None:
             continue
+        if only_rules is not None and f.rule_id not in only_rules:
+            continue
         by_file.setdefault(f.location.path, []).append(f)
 
+    root = project.root.resolve()
     for rel_path, file_findings in by_file.items():
         abs_path = project.root / rel_path
+        # Containment guard: the fix engine writes code back to disk, so a crafted
+        # path (traversal, or a symlink pointing outside the tree) must never be
+        # able to redirect that write beyond the project root.
+        try:
+            resolved = abs_path.resolve()
+        except OSError:
+            report.skipped.append(f"{rel_path}: path could not be resolved")
+            continue
+        if not resolved.is_relative_to(root) or abs_path.is_symlink():
+            report.skipped.append(
+                f"{rel_path}: refusing to write outside the project or through a symlink")
+            continue
         if not abs_path.exists():
             report.skipped.append(f"{rel_path}: file not found")
             continue

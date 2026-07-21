@@ -46,11 +46,30 @@ log = logging.getLogger("argus.scanners.custom_rules")
 _CONFIDENCE = {"low": Confidence.LOW, "medium": Confidence.MEDIUM,
                "high": Confidence.HIGH}
 
+# Defense-in-depth ReDoS lint: reject a quantifier applied to a group that
+# already contains an unbounded quantifier (e.g. ``(a+)+``, ``([a-z]*)+``), the
+# classic catastrophic-backtracking shape. Custom rules can come from an
+# untrusted repository, and Python's ``re`` cannot be interrupted mid-match, so a
+# pathological pattern would otherwise hang the whole scan. This is heuristic and
+# conservative (it only flags the obvious nested-quantifier form); the primary
+# control is the trust gate on where convention-dir rules are loaded from.
+_CATASTROPHIC = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*]")
+
+
+def _is_catastrophic(pattern: str) -> bool:
+    return bool(_CATASTROPHIC.search(pattern))
+
 
 def _coerce_rule(raw: dict, source: str) -> Rule | None:
     try:
         rid = str(raw["id"]).strip()
-        pattern = re.compile(str(raw["pattern"]))
+        raw_pattern = str(raw["pattern"])
+        if _is_catastrophic(raw_pattern) or (
+                raw.get("suppress") and _is_catastrophic(str(raw["suppress"]))):
+            log.warning("skipping custom rule in %s: pattern rejected as a possible "
+                        "ReDoS (nested quantifier)", source)
+            return None
+        pattern = re.compile(raw_pattern)
     except (KeyError, re.error, TypeError) as exc:
         log.warning("skipping custom rule in %s: %s", source, exc)
         return None
@@ -95,8 +114,16 @@ def _load_file(path: Path) -> list[Rule]:
     return out
 
 
-def _resolve_paths(project_root: Path, option) -> list[Path]:
-    """Collect rule-file paths from the config option and the convention dir."""
+def _resolve_paths(project_root: Path, option,
+                   include_convention_dir: bool = True) -> list[Path]:
+    """Collect rule-file paths from the config option and the convention dir.
+
+    ``include_convention_dir`` is False for untrusted targets (a cloned remote
+    repo without ``--trust-remote-config``): the ``.argus/rules/*.yml``
+    convention directory ships *inside* the scanned repo, so honoring it there
+    would let a hostile repository inject regexes into the scanner. Explicit
+    ``option`` paths come from a trusted config and are always honored.
+    """
     paths: list[Path] = []
     specs: list[str] = []
     if isinstance(option, str):
@@ -109,9 +136,9 @@ def _resolve_paths(project_root: Path, option) -> list[Path]:
             paths.append(p)
         else:
             paths.extend(sorted(project_root.glob(spec)))
-    # Convention directory (deterministic order).
+    # Convention directory (deterministic order), only for trusted targets.
     conv = project_root / ".argus" / "rules"
-    if conv.is_dir():
+    if include_convention_dir and conv.is_dir():
         paths.extend(sorted(conv.glob("*.yml")))
         paths.extend(sorted(conv.glob("*.yaml")))
     # De-duplicate while preserving order.
@@ -125,24 +152,26 @@ def _resolve_paths(project_root: Path, option) -> list[Path]:
     return unique
 
 
-def load_custom_rules(project_root: Path, option=None) -> list[Rule]:
+def load_custom_rules(project_root: Path, option=None,
+                      include_convention_dir: bool = True) -> list[Rule]:
     """Load and validate all custom rules for a project. Never raises."""
     rules: list[Rule] = []
-    for path in _resolve_paths(project_root, option):
+    for path in _resolve_paths(project_root, option, include_convention_dir):
         rules.extend(_load_file(path))
     if rules:
         log.info("loaded %d custom rule(s)", len(rules))
     return rules
 
 
-def config_signature(project_root: Path, option=None) -> str:
+def config_signature(project_root: Path, option=None,
+                     include_convention_dir: bool = True) -> str:
     """A stable signature of the active custom-rule files (path + mtime + size).
 
     Folded into the scanner cache key so editing a rules file invalidates cached
     findings for that project.
     """
     parts: list[str] = []
-    for path in _resolve_paths(project_root, option):
+    for path in _resolve_paths(project_root, option, include_convention_dir):
         try:
             st = path.stat()
             parts.append(f"{path}:{int(st.st_mtime)}:{st.st_size}")
