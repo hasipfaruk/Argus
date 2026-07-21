@@ -19,6 +19,12 @@ from typing import Any
 from argus.analysis.languages import detect_language
 from argus.core.project import Project
 
+# Bound how much source text is held for framework/API/auth signal matching.
+# Per-file cap stops a few huge files dominating; the aggregate budget stops a
+# monorepo of many small files from building an unbounded in-memory blob.
+_PER_FILE_SOURCE_CAP = 20_000
+_SOURCE_BLOB_BUDGET = 1_500_000  # ~1.5 MB of characters across the project
+
 # --- framework signatures -------------------------------------------------
 # Each entry: framework name -> (dependency-name substrings, source regexes).
 # A framework is reported if any manifest dependency or any source hit matches.
@@ -84,6 +90,7 @@ class RepositoryAnalyzer:
         languages: dict[str, int] = {}
         manifest_deps: set[str] = set()
         source_blob_parts: list[str] = []
+        source_blob_used = 0
         arch: dict[str, Any] = {
             "apis": [],
             "auth": [],
@@ -102,10 +109,14 @@ class RepositoryAnalyzer:
                 f.language = lang
                 languages[lang] = languages.get(lang, 0) + 1
 
-            # Collect a bounded blob of source text for signal matching. Cap the
-            # per-file contribution so a few huge files don't dominate memory.
+            # Collect a bounded blob of source text for signal matching.
             if lang and lang not in {"JSON", "CSS", "HTML"}:
-                source_blob_parts.append(f.text()[:20_000])
+                if source_blob_used < _SOURCE_BLOB_BUDGET:
+                    room = _SOURCE_BLOB_BUDGET - source_blob_used
+                    chunk = f.text()[: min(_PER_FILE_SOURCE_CAP, room)]
+                    if chunk:
+                        source_blob_parts.append(chunk)
+                        source_blob_used += len(chunk)
 
             self._classify_infra(project, f, arch)
 

@@ -25,7 +25,7 @@ Highlights of what is already defended:
 - **Parser safety.** Every YAML load is `yaml.safe_load`; oversized files are
   skipped; rule matching skips over-long lines to bound regex cost.
 - **Malicious repo config.** A scanned repository's own `.argus.yml` is ignored by
-  default and is opt-in via `--remote-config`.
+  default and is opt-in via `--trust-remote-config`.
 - **Secret handling.** Values are redacted to a prefix plus length everywhere;
   live verification is opt-in and read-only.
 - **Report safety.** The HTML report escapes every attacker-controlled field.

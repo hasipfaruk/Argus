@@ -102,6 +102,23 @@ def test_bad_report_is_rejected(client):
     assert "error" in r.json()
 
 
+def test_oversized_api_ingest_is_rejected(client, monkeypatch):
+    monkeypatch.setattr("argus.dashboard.app._MAX_REPORT_BYTES", 64)
+    r = client.post("/api/scans", content=b"{" + b"x" * 200 + b"}")
+    assert r.status_code == 413
+    assert "byte limit" in r.json()["error"]
+
+
+def test_oversized_upload_is_rejected(client, monkeypatch):
+    monkeypatch.setattr("argus.dashboard.app._MAX_REPORT_BYTES", 64)
+    r = client.post(
+        "/upload",
+        files={"file": ("report.json", b"{" + b"x" * 200 + b"}", "application/json")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 413
+
+
 def test_missing_pages_404(client):
     assert client.get("/projects/nope").status_code == 404
     assert client.get("/scans/9999").status_code == 404

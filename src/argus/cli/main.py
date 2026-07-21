@@ -86,8 +86,8 @@ def scan(
     ),
     fmt: list[str] = typer.Option(
         ["table"], "--format", "-f",
-        help="Output format(s): table, json, sarif, gitlab, markdown, html, csv. "
-             "Repeatable.",
+        help="Output format(s): table, json, sarif, gitlab, markdown, html, csv, "
+             "badge, vex. Repeatable.",
     ),
     output: Path | None = typer.Option(
         None, "--output", "-o",
@@ -847,6 +847,13 @@ def _emit(result: ScanResult, formats: list[str], output: Path | None,
     # Count file-bound formats (everything except the console table) so we know
     # whether a single -o file path is enough or we must disambiguate by extension.
     file_formats = [f for f in formats if f != "table"]
+    if output is None and len(file_formats) > 1:
+        err_console.print(
+            "[red]Error:[/red] multiple machine-readable -f formats require -o "
+            "(a directory or path); writing them all to stdout would concatenate "
+            "and corrupt the streams."
+        )
+        raise typer.Exit(2)
     treat_as_dir = output is not None and (
         output.is_dir() or (output.suffix == "" and not output.exists())
     )
@@ -861,8 +868,12 @@ def _emit(result: ScanResult, formats: list[str], output: Path | None,
             continue
         cls = registry.reporters().get(fmt)
         if cls is None:
-            err_console.print(f"[yellow]Unknown format '{fmt}', skipping.[/yellow]")
-            continue
+            available = ", ".join(["table", *sorted(registry.reporters())])
+            err_console.print(
+                f"[red]Error:[/red] unknown format {fmt!r}. "
+                f"Available: {available}."
+            )
+            raise typer.Exit(2)
         rendered = cls().render(result)
         extension = cls().extension
         if output is None:
